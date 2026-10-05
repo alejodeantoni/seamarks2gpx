@@ -55,6 +55,7 @@ button:disabled{opacity:.5;cursor:default}
 label.radio{display:inline-flex;gap:6px;align-items:center;margin-right:12px}
 .vtx{width:12px;height:12px;border-radius:50%;background:#fff;border:2px solid #d81b60;box-sizing:border-box;cursor:move}
 .vtx.first{background:#d81b60}
+.depth-lbl{font:600 11px/14px system-ui,sans-serif;text-align:center;white-space:nowrap;text-shadow:0 0 3px #fff,0 0 3px #fff}
 details{margin-top:14px}
 summary{cursor:pointer;font-weight:600}
 ol{padding-left:18px;margin:6px 0}
@@ -127,6 +128,7 @@ ol{padding-left:18px;margin:6px 0}
   <p class="note">Solo se buscan los grupos que tengan alguna categoría tildada. Si tildás un grupo nuevo, volvé a tocar «Buscar».</p>
   <label class="check"><input type="checkbox" id="vizName"> Mostrar nombres en la carta (los puentes siempre muestran la altura)</label>
   <label class="check"><input type="checkbox" id="zoneTracks" checked> Exportar líneas como tracks (veriles, zonas, cables, límites de cartas)</label>
+  <label class="check"><input type="checkbox" id="veriLabels" checked> Rotular la profundidad sobre los veriles (cada ~2 km)</label>
   <div class="row">
     <button class="primary" id="dlAll" disabled>Descargar GPX (seleccionadas)</button>
   </div>
@@ -156,7 +158,7 @@ ol{padding-left:18px;margin:6px 0}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
 'use strict';
-const VERSION = '1.8.0';
+const VERSION = '1.9.0';
 
 /* ---------- utilidades DOM ---------- */
 const $ = id => document.getElementById(id);
@@ -222,6 +224,8 @@ const CATEGORIES = [
 ];
 CATEGORIES.push(
   { id: 'shn_avisos', group: 'shn', label: 'Radioavisos vigentes', color: '#e53935', def: true, types: [] },
+  { id: 'shn_boyas',  group: 'shn', label: 'Boyas oficiales (boyado SHN)', color: '#d62728', def: true, types: [] },
+  { id: 'shn_balizas', group: 'shn', label: 'Balizas oficiales', color: '#2ca02c', def: true, types: [] },
   { id: 'shn_faros',  group: 'shn', label: 'Faros (con característica y descripción)', color: '#f5a623', def: true, types: [] },
   { id: 'shn_curvas', group: 'shn', label: 'Veriles / curvas batimétricas', color: '#1565c0', def: true, types: [] },
   { id: 'shn_fondo',  group: 'shn', label: 'Calidad de fondo (para fondear)', color: '#795548', def: false, types: [] },
@@ -410,7 +414,7 @@ const SVC_LABEL = {
   svc_slip: 'Rampa / varadero', svc_yard: 'Astillero / taller / náutica', svc_ferry: 'Terminal de ferry',
   sec_pna: 'Prefectura / guardacostas / salvamento', sec_lifeguard: 'Guardavidas', sec_hospital: 'Hospital',
   sec_bridge: 'Puente', mine: 'Marca propia',
-  shn_avisos: 'Radioaviso (SHN)', shn_faros: 'Faro (SHN)', shn_curvas: 'Veril (SHN)', shn_fondo: 'Calidad de fondo (SHN)',
+  shn_avisos: 'Radioaviso (SHN)', shn_boyas: 'Boya (SHN)', shn_balizas: 'Baliza (SHN)', shn_faros: 'Faro (SHN)', shn_curvas: 'Veril (SHN)', shn_fondo: 'Calidad de fondo (SHN)',
   shn_enc: 'Límite de carta (SHN)'
 };
 const WATER_SPORTS = /sailing|rowing|canoe|kayak|motorboat|water_ski|yachting|boat/;
@@ -621,8 +625,25 @@ function buildGPX(marks, title, showNames, withTracks = true) {
   add(meta, 'desc', 'Marcas náuticas de OpenStreetMap/OpenSeaMap (© colaboradores de OSM, ODbL, NO oficial) y datos del Geoportal del SHN. Verificar siempre con la cartografía oficial vigente.', 2);
   add(meta, 'time', new Date().toISOString(), 2);
   nl(meta, 1);
+  const depthLabels = $('veriLabels') ? $('veriLabels').checked : true;
   for (const m of marks) {
-    if (m.trackOnly) continue;
+    if (m.trackOnly) {
+      if (depthLabels && m.labels) for (const [la, lo] of m.labels) {
+        const w = add(root, 'wpt', null, 1);
+        w.setAttribute('lat', la.toFixed(7)); w.setAttribute('lon', lo.toFixed(7));
+        add(w, 'name', m.labelText, 2);
+        add(w, 'desc', m.desc, 2);
+        add(w, 'src', m.src || 'SHN', 2);
+        add(w, 'sym', 'Symbol-Empty', 2);
+        add(w, 'type', 'Profundidad', 2);
+        const ext = add(w, 'extensions', null, 2);
+        for (const [k, v] of [['viz', '1'], ['viz_name', '1']]) {
+          nl(ext, 3); const x = doc.createElementNS(OC, 'opencpn:' + k); x.textContent = v; ext.appendChild(x);
+        }
+        nl(ext, 2); nl(w, 1);
+      }
+      continue;
+    }
     const w = add(root, 'wpt', null, 1);
     w.setAttribute('lat', m.lat.toFixed(7));
     w.setAttribute('lon', m.lon.toFixed(7));
@@ -1037,7 +1058,14 @@ function renderMap() {
       L.polyline(line, { color: m.cssColor || catColor, weight: m.cat === 'shn_curvas' ? 1.5 : 2,
         dashArray: m.cat === 'shn_curvas' ? null : '6 4', interactive: false }).addTo(layerGroup);
     }
-    if (m.trackOnly) continue;
+    if (m.trackOnly) {
+      if (m.labels && $('veriLabels').checked) for (const pt of m.labels) {
+        L.marker(pt, { interactive: false, icon: L.divIcon({ className: 'depth-lbl', html: '', iconSize: [30, 14] }) })
+          .on('add', ev => { const d = ev.target.getElement(); if (d) d.textContent = m.labelText; d && (d.style.color = m.cssColor); })
+          .addTo(layerGroup);
+      }
+      continue;
+    }
     m._layer = L.circleMarker([m.lat, m.lon], {
       radius: isPoi(m.cat) || m.cat === 'mine' ? 7 : m.cat === 'lights' ? 6 : 5,
       weight: isPoi(m.cat) || m.edited ? 2 : 1, color: m.edited ? '#00a676' : isPoi(m.cat) ? '#fff' : '#000',
@@ -1134,6 +1162,22 @@ function simplify(line, tol = 0.00005) {
   }
   return line.filter((_, i) => keep[i]);
 }
+// puntos cada ~`every` metros a lo largo de una línea (para rotular la profundidad del veril)
+function labelPoints(line, every) {
+  const R = 6371000, rad = Math.PI / 180, pts = [];
+  let acc = every / 2, total = 0;
+  for (let i = 1; i < line.length; i++) {
+    const [la1, lo1] = line[i - 1], [la2, lo2] = line[i];
+    const d = R * Math.hypot((la2 - la1) * rad, (lo2 - lo1) * rad * Math.cos((la1 + la2) / 2 * rad));
+    total += d;
+    while (acc <= d && d > 0) {
+      const t = acc / d; pts.push([la1 + (la2 - la1) * t, lo1 + (lo2 - lo1) * t]); acc += every;
+    }
+    acc -= d;
+  }
+  if (!pts.length && total > 300) pts.push(line[Math.floor(line.length / 2)]);
+  return pts;
+}
 // recorta líneas al área: deja solo los tramos con puntos adentro
 function clipLines(lines, inArea) {
   const out = [];
@@ -1157,6 +1201,83 @@ function fondoSym(q) {
   if (/^A\b/.test(c)) return 'Sea-Floor-Text-Sand';
   return 'Symbol-Spot-Black';
 }
+/* --- Boyas y balizas: el SHN no las publica por WFS, pero el WMS devuelve sus atributos S-57 con GetFeatureInfo.
+   Se pide una imagen "virtual" grande por tramo y un buffer que cubre todo el tramo. --- */
+const S57 = {
+  COLOUR: { 1: 'white', 2: 'black', 3: 'red', 4: 'green', 5: 'blue', 6: 'yellow', 7: 'grey', 8: 'brown', 9: 'amber',
+    10: 'violet', 11: 'orange', 12: 'magenta', 13: 'pink' },
+  COLPAT: { 1: 'horizontal', 2: 'vertical', 3: 'diagonal', 4: 'squared', 5: 'stripes', 6: 'border' },
+  BOYSHP: { 1: 'conical', 2: 'can', 3: 'spherical', 4: 'pillar', 5: 'spar', 6: 'barrel', 7: 'super-buoy', 8: 'ice-buoy' },
+  BCNSHP: { 1: 'stake', 2: 'withy', 3: 'tower', 4: 'lattice', 5: 'pile', 6: 'cairn', 7: 'buoyant' },
+  CATLAM: { 1: 'port', 2: 'starboard', 3: 'preferred_channel_starboard', 4: 'preferred_channel_port' },
+  CATCAM: { 1: 'north', 2: 'east', 3: 'south', 4: 'west' },
+  TOPSHP: { 1: 'cone, point up', 2: 'cone, point down', 3: 'sphere', 4: '2 spheres', 5: 'cylinder', 6: 'board',
+    7: 'x-shape', 8: 'cross', 9: 'cube', 10: '2 cones point together', 11: '2 cones base together', 12: 'rhombus',
+    13: '2 cones up', 14: '2 cones down' },
+  OBJTIP: { BOYLAT: 'buoy_lateral', BOYCAR: 'buoy_cardinal', BOYISD: 'buoy_isolated_danger', BOYSAW: 'buoy_safe_water',
+    BOYSPP: 'buoy_special_purpose', BOYINB: 'buoy_installation', BCNLAT: 'beacon_lateral', BCNCAR: 'beacon_cardinal',
+    BCNISD: 'beacon_isolated_danger', BCNSAW: 'beacon_safe_water', BCNSPP: 'beacon_special_purpose' }
+};
+const s57list = (v, dict) => String(v || '').split(',').map(x => dict[x.trim()]).filter(Boolean).join(';');
+async function gfiAll(layer, bbox, inArea, onTile) {
+  const W = 'https://wms.shn.gob.ar/geoserver/wms';
+  const seen = new Map();
+  // Una consulta GetFeatureInfo que cubre todo el tramo (buffer = medio ancho de la imagen virtual)
+  const one = async ([s, w, n, e], px) => {
+    const u = `${W}?service=WMS&version=1.1.1&request=GetFeatureInfo&layers=${encodeURIComponent(layer)}` +
+      `&query_layers=${encodeURIComponent(layer)}&styles=&srs=EPSG:4326&bbox=${w},${s},${e},${n}` +
+      `&width=${px}&height=${px}&x=${px / 2}&y=${px / 2}&buffer=${px / 2}&info_format=application/json&feature_count=10000`;
+    const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 60000);
+    try {
+      const txt = await (await fetch(u, { signal: ctl.signal })).text();
+      try { return JSON.parse(txt).features || []; }
+      catch { throw new Error(/MaxMemory/.test(txt) ? 'memoria' : 'respuesta inválida'); }
+    } finally { clearTimeout(t); }
+  };
+  const tiles = splitBBox(bbox, 0.5);
+  for (let i = 0; i < tiles.length; i++) {
+    onTile && onTile(i + 1, tiles.length);
+    let feats;
+    try { feats = await one(tiles[i], 2000); }
+    catch (err) {
+      // si el servidor se queja, se parte el tramo en 4
+      feats = [];
+      for (const q of splitBBox(tiles[i], 0.25)) feats.push(...await one(q, 1000));
+    }
+    for (const f of feats) {
+      const c = f.geometry && f.geometry.coordinates;
+      if (c && inArea(c[1], c[0])) seen.set(f.id, f);
+    }
+  }
+  return [...seen.values()];
+}
+function shnAidToMark(f, catId, topmarks) {
+  const p = f.properties, [lon, lat] = f.geometry.coordinates;
+  const tip = String(p.OBJTIP || '').trim();
+  const type = S57.OBJTIP[tip] || (tip.startsWith('BCN') ? 'beacon_special_purpose' : 'buoy_special_purpose');
+  const osmCat = TYPE_TO_CAT[type];
+  const colour = s57list(p.COLOUR, S57.COLOUR);
+  const category = p.CATLAM ? S57.CATLAM[String(p.CATLAM).trim()] : p.CATCAM ? S57.CATCAM[String(p.CATCAM).trim()] : '';
+  const shape = p.BOYSHP ? S57.BOYSHP[p.BOYSHP] : p.BCNSHP ? S57.BCNSHP[p.BCNSHP] : '';
+  const top = topmarks && topmarks.get(lat.toFixed(4) + ',' + lon.toFixed(4));
+  const tags = { [`seamark:${type}:category`]: category || '' };
+  const title = TYPE_ES[type] || 'Señal';
+  const lines = [category ? `${title} – ${tr(category, CAT_ES)}` : title];
+  if (colour) lines.push(`Color: ${tr(colour, COLOURS)}${p.COLPAT ? ' (' + tr(s57list(p.COLPAT, S57.COLPAT), PATTERN) + ')' : ''}`);
+  if (shape) lines.push(`Forma: ${tr(shape, SHAPE)}`);
+  if (top) lines.push(`Marca de tope: ${tr(top.shape, TOPMARK)}${top.colour ? ' ' + tr(top.colour, COLOURS) : ''}`);
+  if (p.INFORM) lines.push(`Info: ${p.INFORM}`);
+  lines.push('Luz: el geoportal no publica la característica (ver Lista de Faros y Balizas del SHN).');
+  if (p.SORDAT) lines.push(`Dato del ${String(p.SORDAT).replace(/(\d{4})(\d{2})(\d{2})/, '$3/$2/$1')}`);
+  lines.push('Fuente: SHN – Geoportal (oficial)');
+  const pseudo = { cat: osmCat, type, tags, colour, lit: false };
+  let shortName = SHORT[osmCat] ? `${SHORT[osmCat]} ${tr(category, CAT_ES)}`.trim() : (SHORT[type] || title);
+  return {
+    id: `shn/${f.id}`, osmType: null, src: 'SHN (oficial)', lat, lon, type, cat: catId, tags, colour, lit: false, web: '',
+    name: p.OBJNAM ? String(p.OBJNAM).trim() : shortName, desc: lines.join('\n'), sym: symbolFor(pseudo)
+  };
+}
+
 async function fetchSHN(bbox, polygon, onStep) {
   const inArea = (la, lo) => la >= bbox[0] && la <= bbox[2] && lo >= bbox[1] && lo <= bbox[3] &&
     (!polygon || pointInPoly(la, lo, polygon));
@@ -1194,6 +1315,21 @@ async function fetchSHN(bbox, polygon, onStep) {
     }
   });
 
+  await step('shn_boyas', 'boyas', async () => {
+    const feats = await gfiAll('SHN:BOYADO', bbox, inArea, (i, n) => onStep && onStep(`boyas (tramo ${i}/${n})`));
+    const tops = new Map();
+    for (const f of feats) if (String(f.id).startsWith('TOPMAR')) {
+      const [lon, lat] = f.geometry.coordinates;
+      tops.set(lat.toFixed(4) + ',' + lon.toFixed(4), { shape: S57.TOPSHP[f.properties.TOPSHP] || '', colour: s57list(f.properties.COLOUR, S57.COLOUR) });
+    }
+    for (const f of feats) if (!String(f.id).startsWith('TOPMAR')) out.push(shnAidToMark(f, 'shn_boyas', tops));
+  });
+
+  await step('shn_balizas', 'balizas', async () => {
+    const feats = await gfiAll('SHN:Vw_BALIZAS', bbox, inArea, (i, n) => onStep && onStep(`balizas (tramo ${i}/${n})`));
+    for (const f of feats) out.push(shnAidToMark(f, 'shn_balizas', null));
+  });
+
   await step('shn_faros', 'faros', async () => {
     for (const f of await wfs('SHN:faros', bbox)) {
       const [lon, lat] = f.geometry.coordinates; const p = f.properties;
@@ -1222,6 +1358,7 @@ async function fetchSHN(bbox, polygon, onStep) {
       const [gc, css] = VERIL_COLOR(d);
       out.push(base(`shn/veril/${f.id}`, 'shn_curvas', lines[0][0][0], lines[0][0][1], {
         name: `Veril ${d} m`, sym: 'Symbol-Empty', lines, trackOnly: true, trackColor: gc, cssColor: css,
+        labels: lines.flatMap(l => labelPoints(l, 2000)), labelText: `${d} m`,
         desc: `Curva batimétrica de ${d} m (profundidad referida al plano de reducción de la carta).\nFuente: SHN / IDERA`
       }));
     }
@@ -1411,6 +1548,8 @@ function init() {
   $('vizName').addEventListener('change', () => store.set('vizName', $('vizName').checked));
   $('zoneTracks').checked = store.get('zoneTracks', true);
   $('zoneTracks').addEventListener('change', () => store.set('zoneTracks', $('zoneTracks').checked));
+  $('veriLabels').checked = store.get('veriLabels', true);
+  $('veriLabels').addEventListener('change', () => { store.set('veriLabels', $('veriLabels').checked); renderMap(); });
   $('fetch').addEventListener('click', doFetch);
   $('turbo').addEventListener('click', openTurbo);
   $('loadBtn').addEventListener('click', () => $('fileIn').click());
