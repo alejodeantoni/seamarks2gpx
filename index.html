@@ -124,7 +124,7 @@ ol{padding-left:18px;margin:6px 0}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
 'use strict';
-const VERSION = '1.2.0';
+const VERSION = '1.3.0';
 
 /* ---------- utilidades DOM ---------- */
 const $ = id => document.getElementById(id);
@@ -245,22 +245,57 @@ const WATER_LEVEL = {
 };
 const tr = (v, dict) => v ? String(v).split(';').map(x => dict[x.trim()] || x.trim().replace(/_/g, ' ')).join(' / ') : '';
 
-/* ---------- símbolos OpenCPN (iconos de serie) ---------- */
+/* ---------- símbolos OpenCPN 5.x (nombres exactos de data/svg/markicons) ---------- */
 function symbolFor(m) {
-  const c = (m.colour || '').split(';')[0];
+  const t = m.tags, type = m.type;
+  const cols = (m.colour || '').split(';').map(c => c.trim());
+  const c0 = cols[0];
+  const lit = m.lit ? '-Lighted' : '';
+  const isBeacon = type.startsWith('beacon_');
+  const cat = (t[`seamark:${type}:category`] || '').split(';')[0];
   switch (m.cat) {
-    case 'lateral':  return c === 'red' ? 'xmred' : c === 'green' ? 'xmgreen' : 'xmblue';
-    case 'cardinal': return 'triangle';
-    case 'danger':   return 'diamond';
-    case 'safe':     return 'circle';
-    case 'special':  return 'square';
-    case 'lights':   return m.type === 'light_vessel' ? 'litevessel' : 'light';
-    case 'hazards':
-      if (m.type === 'wreck') return 'wreck1';
-      if (m.type === 'rock') return /awash|covers|submerged/.test(m.tags['seamark:rock:water_level'] || '') ? 'rock_awash' : 'rock_exposed';
-      return 'snag';
-    case 'harbour':  return m.type === 'mooring' ? 'mooring' : 'anchorage';
-    default:         return 'circle';
+    case 'lateral': {
+      // IALA A: babor rojo / estribor verde · IALA B (Argentina): babor verde / estribor rojo
+      let side = /starboard/.test(cat) ? 'Starboard' : /port/.test(cat) ? 'Port' : (c0 === 'red' ? 'Starboard' : 'Port');
+      let region;
+      if (side === 'Port') region = c0 === 'red' ? 'A' : 'B';
+      else region = c0 === 'green' ? 'A' : 'B';
+      if (/preferred_channel/.test(cat)) { side = c0 === 'red' ? 'Starboard' : 'Port'; region = 'B'; }
+      return `Marks-Lateral-${side}-IALA-${region}${lit}`;
+    }
+    case 'cardinal': {
+      const dir = { north: 'North', south: 'South', east: 'East', west: 'West' }[cat];
+      return dir ? `Marks-Cardinal-${dir}${lit}` : 'Marks-Caution';
+    }
+    case 'danger':  return m.lit ? 'Marks-Danger-Topmark-Lighted' : isBeacon ? 'Marks-Beacon-Danger' : 'Marks-Buoy-Danger';
+    case 'safe':    return m.lit ? 'Marks-Safe-Water-Lighted' : isBeacon ? 'Marks-Beacon-SafeWater' : 'Marks-Safe-Water';
+    case 'special': return `Marks-Caution${lit}`;
+    case 'lights': {
+      if (type === 'light_vessel' || type === 'light_float') return 'Marks-Light-Vessel';
+      if (type === 'light_major' || type === 'landmark') return 'Hazard-Lighthouse';
+      const lc = (t['seamark:light:colour'] || t['seamark:light:1:colour'] || '') +
+                 ';' + (t['seamark:light:2:colour'] || '');
+      const r = /red/.test(lc), g = /green/.test(lc);
+      return r && g ? 'Marks-Light-Red-Green' : r ? 'Marks-Light-Red' : g ? 'Marks-Light-Green' : 'Hazard-Lighthouse';
+    }
+    case 'hazards': {
+      if (type === 'wreck') return /non-dangerous|distributed/.test(cat) ? 'Hazard-Wreck2' : 'Hazard-Wreck1';
+      const wl = t[`seamark:${type}:water_level`] || '';
+      if (type === 'rock') return /dry|part/.test(wl) ? 'Hazard-Rock-Exposed' : 'Hazard-Rock-Awash';
+      return /dry/.test(wl) ? 'Hazard-Obstruction-Dry' : 'Hazard-Obstruction-Shallow';
+    }
+    case 'harbour':
+      if (type === 'anchorage' || type === 'anchor_berth') return '1st-Anchorage';
+      if (type === 'mooring') return cat === 'pile' || cat === 'dolphin' ? 'Marks-Mooring-Pile' : cat === 'buoy' ? 'Marks-Mooring-Buoy' : 'Marks-Mooring-Float';
+      if (type === 'berth') return 'Service-Dock';
+      return 'Service-Marina';
+    default:
+      return ({
+        bridge: 'Landmarks-Bridge1', cable_overhead: 'Hazard-Power-Line1', cable_submarine: 'Hazard-Power-Cable',
+        pipeline_submarine: 'Hazard-Power-Cable', platform: 'Hazard-Oil-Platform', pile: 'Marks-Mooring-Pile',
+        restricted_area: 'Hazard-Warning', pilot_boarding: 'Marks-Boarding-Location',
+        coastguard_station: 'Authority-Police', fog_signal: 'Hazard-Warning'
+      })[type] || 'Info-Info';
   }
 }
 
@@ -331,7 +366,7 @@ function parseElement(e) {
 
   const m = {
     id: `${e.type}/${e.id}`, osmType: e.type, osmId: e.id, lat, lon, type, cat, tags, colour,
-    name: osmName || shortName, desc: lines.join('\n')
+    name: osmName || shortName, desc: lines.join('\n'), lit: lights.length > 0
   };
   m.sym = symbolFor(m);
   return m;
