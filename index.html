@@ -126,7 +126,7 @@ ol{padding-left:18px;margin:6px 0}
   <div class="cats" id="cats"></div>
   <p class="note">Solo se buscan los grupos que tengan alguna categoría tildada. Si tildás un grupo nuevo, volvé a tocar «Buscar».</p>
   <label class="check"><input type="checkbox" id="vizName"> Mostrar nombres en la carta (los puentes siempre muestran la altura)</label>
-  <label class="check"><input type="checkbox" id="zoneTracks" checked> Dibujar límites de zonas y cables (tracks)</label>
+  <label class="check"><input type="checkbox" id="zoneTracks" checked> Exportar líneas como tracks (veriles, zonas, cables, límites de cartas)</label>
   <div class="row">
     <button class="primary" id="dlAll" disabled>Descargar GPX (seleccionadas)</button>
   </div>
@@ -156,7 +156,7 @@ ol{padding-left:18px;margin:6px 0}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
 'use strict';
-const VERSION = '1.7.1';
+const VERSION = '1.8.0';
 
 /* ---------- utilidades DOM ---------- */
 const $ = id => document.getElementById(id);
@@ -220,8 +220,15 @@ const CATEGORIES = [
     types: ['restricted_area', 'military_area', 'cable_area', 'pipeline_area', 'cable_submarine', 'pipeline_submarine',
             'dumping_ground', 'marine_farm', 'precautionary_area', 'seaplane_landing_area'] }
 ];
-CATEGORIES.push({ id: 'mine', group: 'mine', label: 'Mis marcas y agregadas', color: '#00a676', def: true, types: [] });
-const GROUP_LABEL = { marks: 'Marcas náuticas', svc: 'Servicios náuticos', sec: 'Seguridad y restricciones', mine: 'Propias' };
+CATEGORIES.push(
+  { id: 'shn_avisos', group: 'shn', label: 'Radioavisos vigentes', color: '#e53935', def: true, types: [] },
+  { id: 'shn_faros',  group: 'shn', label: 'Faros (con característica y descripción)', color: '#f5a623', def: true, types: [] },
+  { id: 'shn_curvas', group: 'shn', label: 'Veriles / curvas batimétricas', color: '#1565c0', def: true, types: [] },
+  { id: 'shn_fondo',  group: 'shn', label: 'Calidad de fondo (para fondear)', color: '#795548', def: false, types: [] },
+  { id: 'shn_enc',    group: 'shn', label: 'Índice de cartas ENC y croquis del Paraná', color: '#607d8b', def: false, types: [] },
+  { id: 'mine', group: 'mine', label: 'Mis marcas y agregadas', color: '#00a676', def: true, types: [] });
+const GROUP_LABEL = { marks: 'Marcas náuticas (OSM)', svc: 'Servicios náuticos (OSM)', sec: 'Seguridad y restricciones (OSM)',
+  shn: 'SHN — datos oficiales', mine: 'Propias' };
 /* Íconos de serie de OpenCPN 5.x (data/svg/markicons) */
 const ICONS = ['1st-Active-Waypoint','1st-Anchorage','1st-Diamond','1st-Man-Overboard','1st-No-Anchoring','Activity-Campfire','Activity-Camping','Activity-Diving-Scuba-Flag','Activity-Diving-Scuba-Tank','Activity-Diving-Snorkel','Activity-Diving-Spearing','Activity-Fishing','Authority-Customs','Authority-Health','Authority-Immigration','Authority-Police','Authority-Quarantine-Area','Authority-Quarantine-Building','Authority-Quarantine-Flag','Hazard-Airplane','Hazard-Animals-Crocodile','Hazard-Animals-Jellyfish','Hazard-Animals-Shark','Hazard-Danger','Hazard-Dredging','Hazard-Fish-Aquatic-Farm','Hazard-Fish-Lobster-String','Hazard-Fish-Nets','Hazard-Lighthouse','Hazard-Obstruction-Deep','Hazard-Obstruction-Dry','Hazard-Obstruction-Shallow','Hazard-Oil-Platform','Hazard-Overfalls','Hazard-Pollution-Air','Hazard-Pollution-Bio','Hazard-Pollution-Nuclear','Hazard-Pollution-Oil','Hazard-Pollution-Quarantine-Area','Hazard-Power-Cable','Hazard-Power-Line1','Hazard-Power-Line2','Hazard-Rock-Awash','Hazard-Rock-Exposed','Hazard-Sandbar','Hazard-Snag','Hazard-Warning','Hazard-Wind-Farm','Hazard-Wreck1','Hazard-Wreck2','Info-Fish-Haven','Info-Fish-Pelagic','Info-Fish-Reef','Info-Fish-Shark','Info-Fish-Whale','Info-Fish','Info-Info','Info-No-Discharge','Info-Photo','Info-Video','Landmarks-Bridge1','Landmarks-Bridge2','Landmarks-Bridge3','Landmarks-Pier1','Landmarks-Pier2','Landmarks-Pier3','Landmarks-Stream-River','Landmarks-Waterfall','Marks-Active-Waypoint','Marks-Beacon-Danger','Marks-Beacon-SafeWater','Marks-Blank','Marks-Boarding-Location','Marks-Boundary','Marks-Buoy-Danger','Marks-Buoy-Safe-Water','Marks-Buoy-TypeA','Marks-Buoy-TypeB','Marks-Cardinal-East-Lighted','Marks-Cardinal-East','Marks-Cardinal-Nord-Lighted','Marks-Cardinal-Nord','Marks-Cardinal-North-Lighted','Marks-Cardinal-North','Marks-Cardinal-South-Lighted','Marks-Cardinal-South','Marks-Cardinal-West-Lighted','Marks-Cardinal-West','Marks-Caution-Lighted','Marks-Caution','Marks-Danger-Topmark-Lighted','Marks-Danger-Topmark','Marks-Lateral-Port-IALA-A-Lighted','Marks-Lateral-Port-IALA-A','Marks-Lateral-Port-IALA-B-Lighted','Marks-Lateral-Port-IALA-B','Marks-Lateral-Starboard-IALA-A-Lighted','Marks-Lateral-Starboard-IALA-A','Marks-Lateral-Starboard-IALA-B-Lighted','Marks-Lateral-Starboard-IALA-B','Marks-Light-Green','Marks-Light-Red-Green','Marks-Light-Red','Marks-Light-TypeA','Marks-Light-TypeB','Marks-Light-Vessel','Marks-Mooring-Buoy-Super','Marks-Mooring-Buoy','Marks-Mooring-Float','Marks-Mooring-Pile','Marks-New-Danger-Lighted','Marks-New-Danger','Marks-Safe-Water-Lighted','Marks-Safe-Water','Service-Chandlery','Service-Dock-Dinghy','Service-Dock','Service-Food','Service-Fuel-Jerry-Diesel','Service-Fuel-Jerry-Petrol','Service-Fuel-Jerry','Service-Fuel-LPG','Service-Fuel-Pump-Diesel-Petrol','Service-Fuel-Pump-Diesel','Service-Fuel-Pump-Petrol','Service-Grocery1','Service-Grocery2','Service-Haulout','Service-Ice1','Service-Ice2','Service-Ice3','Service-Internet-Cafe','Service-Internet-WiFi','Service-Laundry','Service-Marina','Service-Public-Landing','Service-Pump-Out-Boat','Service-Pump-Out-Facility','Service-Repairs','Service-Water1','Service-Water2','Service-Wine&Dine','Service-Yacht-Club','Symbol-Anchor1','Symbol-Anchor2','Symbol-Anchor3','Symbol-Arrow-Black','Symbol-Arrow-Blue','Symbol-Arrow-Green','Symbol-Arrow-Magenta','Symbol-Arrow-Orange','Symbol-Arrow-Red','Symbol-Arrow-White','Symbol-Arrow-Yellow','Symbol-Circle-Black','Symbol-Circle-Blue','Symbol-Circle-Green','Symbol-Circle-Magenta','Symbol-Circle-Orange','Symbol-Circle-Red','Symbol-Circle-White','Symbol-Circle-Yellow','Symbol-Circle','Symbol-Diamond-Black','Symbol-Diamond-Blue','Symbol-Diamond-Green','Symbol-Diamond-Magenta','Symbol-Diamond-Orange','Symbol-Diamond-Red','Symbol-Diamond-White','Symbol-Diamond-Yellow','Symbol-Empty','Symbol-Exclamation-Black','Symbol-Exclamation-Blue','Symbol-Exclamation-Green','Symbol-Exclamation-Magenta','Symbol-Exclamation-Orange','Symbol-Exclamation-Red','Symbol-Exclamation-White','Symbol-Exclamation-Yellow','Symbol-Pin-Black','Symbol-Pin-Blue','Symbol-Pin-Green','Symbol-Pin-Magenta','Symbol-Pin-Orange','Symbol-Pin-Red','Symbol-Pin-White','Symbol-Pin-Yellow','Symbol-Question-Black','Symbol-Question-Blue','Symbol-Question-Green','Symbol-Question-Magenta','Symbol-Question-Orange','Symbol-Question-Red','Symbol-Question-White','Symbol-Question-Yellow','Symbol-Spot-Black','Symbol-Spot-Blue','Symbol-Spot-Green','Symbol-Spot-Magenta','Symbol-Spot-Orange','Symbol-Spot-Red','Symbol-Spot-White','Symbol-Spot-Yellow','Symbol-Square-Black','Symbol-Square-Blue','Symbol-Square-Green','Symbol-Square-Magenta','Symbol-Square-Orange','Symbol-Square-Red','Symbol-Square-White','Symbol-Square-Yellow','Symbol-Square','Symbol-Star-Black','Symbol-Star-Blue','Symbol-Star-Green','Symbol-Star-Magenta','Symbol-Star-Orange','Symbol-Star-Red','Symbol-Star-White','Symbol-Star-Yellow','Symbol-Tick-Black','Symbol-Tick-Blue','Symbol-Tick-Green','Symbol-Tick-Magenta','Symbol-Tick-Orange','Symbol-Tick-Red','Symbol-Tick-White','Symbol-Tick-Yellow','Symbol-Triangle','Symbol-X-Large-Black','Symbol-X-Large-Blue','Symbol-X-Large-Green','Symbol-X-Large-Magenta','Symbol-X-Large-Orange','Symbol-X-Large-Red','Symbol-X-Large-White','Symbol-X-Large-Yellow','Symbol-X-Small-Black','Symbol-X-Small-Blue','Symbol-X-Small-Green','Symbol-X-Small-Magenta','Symbol-X-Small-Orange','Symbol-X-Small-Red','Symbol-X-Small-White','Symbol-X-Small-Yellow'];
 const isPoi = cat => /^(svc|sec)_/.test(cat);
@@ -402,7 +409,9 @@ const SVC_LABEL = {
   svc_marina: 'Marina', svc_club: 'Club náutico', svc_storage: 'Guardería náutica', svc_fuel: 'Combustible náutico',
   svc_slip: 'Rampa / varadero', svc_yard: 'Astillero / taller / náutica', svc_ferry: 'Terminal de ferry',
   sec_pna: 'Prefectura / guardacostas / salvamento', sec_lifeguard: 'Guardavidas', sec_hospital: 'Hospital',
-  sec_bridge: 'Puente', mine: 'Marca propia'
+  sec_bridge: 'Puente', mine: 'Marca propia',
+  shn_avisos: 'Radioaviso (SHN)', shn_faros: 'Faro (SHN)', shn_curvas: 'Veril (SHN)', shn_fondo: 'Calidad de fondo (SHN)',
+  shn_enc: 'Límite de carta (SHN)'
 };
 const WATER_SPORTS = /sailing|rowing|canoe|kayak|motorboat|water_ski|yachting|boat/;
 function serviceCat(t) {
@@ -609,16 +618,17 @@ function buildGPX(marks, title, showNames, withTracks = true) {
   };
   const meta = add(root, 'metadata', null, 1);
   add(meta, 'name', title, 2);
-  add(meta, 'desc', 'Marcas náuticas de OpenStreetMap/OpenSeaMap. Datos © colaboradores de OpenStreetMap (ODbL). NO OFICIAL: verificar con cartografía del SHN.', 2);
+  add(meta, 'desc', 'Marcas náuticas de OpenStreetMap/OpenSeaMap (© colaboradores de OSM, ODbL, NO oficial) y datos del Geoportal del SHN. Verificar siempre con la cartografía oficial vigente.', 2);
   add(meta, 'time', new Date().toISOString(), 2);
   nl(meta, 1);
   for (const m of marks) {
+    if (m.trackOnly) continue;
     const w = add(root, 'wpt', null, 1);
     w.setAttribute('lat', m.lat.toFixed(7));
     w.setAttribute('lon', m.lon.toFixed(7));
     add(w, 'name', m.name, 2);
     add(w, 'desc', m.desc, 2);
-    add(w, 'src', m.osmType ? 'OpenStreetMap' : 'Propia', 2);
+    add(w, 'src', m.src || (m.osmType ? 'OpenStreetMap' : 'Propia'), 2);
     if (m.osmType) {
       const link = add(w, 'link', null, 2);
       link.setAttribute('href', `https://www.openstreetmap.org/${m.osmType}/${m.osmId}`);
@@ -645,14 +655,16 @@ function buildGPX(marks, title, showNames, withTracks = true) {
       const trk = add(root, 'trk', null, 1);
       add(trk, 'name', arr.length > 1 ? `${m.name} (${i + 1})` : m.name, 2);
       add(trk, 'desc', m.desc, 2);
-      const link = add(trk, 'link', null, 2);
-      link.setAttribute('href', `https://www.openstreetmap.org/${m.osmType}/${m.osmId}`);
-      add(trk, 'type', TYPE_ES[m.type] || m.type, 2);
+      if (m.osmType) {
+        const link = add(trk, 'link', null, 2);
+        link.setAttribute('href', `https://www.openstreetmap.org/${m.osmType}/${m.osmId}`);
+      }
+      add(trk, 'type', TYPE_ES[m.type] || SVC_LABEL[m.type] || m.type, 2);
       const ext = add(trk, 'extensions', null, 2);
       nl(ext, 3);
       const te = doc.createElementNS(GX, 'gpxx:TrackExtension');
       const dc = doc.createElementNS(GX, 'gpxx:DisplayColor');
-      dc.textContent = /military|no_entry/.test(m.type + (m.tags[`seamark:${m.type}:restriction`] || '')) ? 'Red' : 'Magenta';
+      dc.textContent = m.trackColor || (/military|no_entry/.test(m.type + (m.tags[`seamark:${m.type}:restriction`] || '')) ? 'Red' : 'Magenta');
       te.appendChild(dc); ext.appendChild(te);
       nl(ext, 3);
       const vz = doc.createElementNS(OC, 'opencpn:viz'); vz.textContent = '1'; ext.appendChild(vz);
@@ -704,11 +716,11 @@ const QUERY_PARTS = {
     eq('railway', ['rail', 'light_rail', 'narrow_gauge'], 'way', '["bridge"]["bridge"!="no"]')
 };
 const RESTR_GEOM = RESTR.split('|').map(v => `nwr["seamark:type"="${v}"];`).join('');
-const GROUP_NAMES = { marks: 'marcas náuticas', svc: 'servicios', sec: 'seguridad' };
+const GROUP_NAMES = { marks: 'marcas náuticas', svc: 'servicios', sec: 'seguridad', shn: 'SHN' };
 function activeGroups() {
   const g = new Set();
   for (const c of CATEGORIES) if (checked[c.id] && c.group !== 'mine') g.add(c.group || 'marks');
-  return ['marks', 'svc', 'sec'].filter(x => g.has(x));
+  return ['marks', 'svc', 'sec', 'shn'].filter(x => g.has(x));
 }
 function overpassQuery(bbox, groups = ['marks', 'svc', 'sec'], timeout = 45, polygon = null) {
   const [s, w, n, e] = bbox;
@@ -778,8 +790,9 @@ function splitBBox([s, w, n, e], step = 1) {
   return tiles;
 }
 async function overpass(bbox, onTry, polygon = null) {
+  if (!activeGroups().some(g => g !== 'shn')) return { els: [], failed: [] };
   const tiles = splitBBox(bbox);
-  const groups = activeGroups();
+  const groups = activeGroups().filter(g => g !== 'shn');
   const all = [], failed = [];
   const steps = tiles.length * groups.length;
   let k = 0;
@@ -1021,8 +1034,10 @@ function renderMap() {
     const fill = (m.cat === 'lateral' || m.cat === 'cardinal' || m.cat === 'special' || m.cat === 'safe' || m.cat === 'danger')
       ? (COLOUR_CSS[c0] || catColor) : catColor;
     for (const line of m.lines || []) {
-      L.polyline(line, { color: catColor, weight: 2, dashArray: '6 4', interactive: false }).addTo(layerGroup);
+      L.polyline(line, { color: m.cssColor || catColor, weight: m.cat === 'shn_curvas' ? 1.5 : 2,
+        dashArray: m.cat === 'shn_curvas' ? null : '6 4', interactive: false }).addTo(layerGroup);
     }
+    if (m.trackOnly) continue;
     m._layer = L.circleMarker([m.lat, m.lon], {
       radius: isPoi(m.cat) || m.cat === 'mine' ? 7 : m.cat === 'lights' ? 6 : 5,
       weight: isPoi(m.cat) || m.edited ? 2 : 1, color: m.edited ? '#00a676' : isPoi(m.cat) ? '#fff' : '#000',
@@ -1031,7 +1046,7 @@ function renderMap() {
   }
 }
 
-function loadElements(els, label) {
+function loadElements(els, label, extra = []) {
   // Un mismo elemento puede venir dos veces (con centro y con geometría): se fusionan.
   const byId = new Map();
   for (const e of els) {
@@ -1048,9 +1063,9 @@ function loadElements(els, label) {
     const m = parseElement(e);
     if (m) parsed.push(m);
   }
-  const inside = lastPolygon
+  const inside = (lastPolygon
     ? parsed.filter(m => (m.lines && m.lines.length) || pointInPoly(m.lat, m.lon, lastPolygon))
-    : parsed;
+    : parsed).concat(extra);
   marks = applyEdits(inside);
   setStatus(marks.length
     ? `${marks.length} marcas ${label}.`
@@ -1070,6 +1085,175 @@ function queryArea() {
   if (!b) { setStatus('Completá las cuatro coordenadas de la zona.', 'err'); return null; }
   return { bbox: b, polygon: null };
 }
+/* ---------- SHN: geoportal oficial (WFS de wms.shn.gob.ar + API de radioavisos) ---------- */
+const SHN_WFS = 'https://wms.shn.gob.ar/geoserver/wfs';
+const SHN_API = 'https://geoportal.shn.gob.ar/api/v1';
+async function fetchJSON(url, ms = 60000) {
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), ms);
+  try {
+    const r = await fetch(url, { signal: ctl.signal });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.json();
+  } catch (err) {
+    throw err.name === 'AbortError' ? new Error('tiempo de espera agotado') : err;
+  } finally { clearTimeout(t); }
+}
+async function wfs(typeName, [s, w, n, e]) {
+  const u = `${SHN_WFS}?service=WFS&version=2.0.0&request=GetFeature&typeNames=${encodeURIComponent(typeName)}` +
+    `&outputFormat=application/json&bbox=${s},${w},${n},${e},urn:ogc:def:crs:EPSG::4326`;
+  return (await fetchJSON(u)).features || [];
+}
+// GeoJSON (lon,lat) -> lista de líneas [[lat,lon],…]
+function geoLines(g) {
+  if (!g) return [];
+  const ll = arr => arr.map(c => [c[1], c[0]]);
+  switch (g.type) {
+    case 'LineString': return [ll(g.coordinates)];
+    case 'MultiLineString': case 'Polygon': return g.coordinates.map(ll);
+    case 'MultiPolygon': return g.coordinates.flat().map(ll);
+    default: return [];
+  }
+}
+// simplificación Douglas-Peucker (tolerancia en grados, ~5 m) para que el GPX no pese de más
+function simplify(line, tol = 0.00005) {
+  if (line.length < 3) return line;
+  const keep = new Uint8Array(line.length); keep[0] = keep[line.length - 1] = 1;
+  const stack = [[0, line.length - 1]];
+  while (stack.length) {
+    const [a, b] = stack.pop();
+    const [ay, ax] = line[a], [by, bx] = line[b];
+    const dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy || 1e-18;
+    let max = 0, idx = -1;
+    for (let i = a + 1; i < b; i++) {
+      const [py, px] = line[i];
+      const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len2));
+      const d = Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+      if (d > max) { max = d; idx = i; }
+    }
+    if (max > tol && idx > 0) { keep[idx] = 1; stack.push([a, idx], [idx, b]); }
+  }
+  return line.filter((_, i) => keep[i]);
+}
+// recorta líneas al área: deja solo los tramos con puntos adentro
+function clipLines(lines, inArea) {
+  const out = [];
+  for (const line of lines) {
+    let run = [];
+    line.forEach((p, i) => {
+      if (inArea(p[0], p[1])) run.push(p);
+      else { if (run.length > 1) out.push(run); run = []; }
+    });
+    if (run.length > 1) out.push(run);
+  }
+  return out;
+}
+const VERIL_COLOR = d => d <= 2 ? ['Red', '#e53935'] : d <= 5 ? ['Magenta', '#c2185b'] : d <= 10 ? ['Blue', '#1565c0']
+  : d <= 20 ? ['DarkCyan', '#00838f'] : ['DarkGray', '#757575'];
+function fondoSym(q) {
+  const c = (q || '').trim().toUpperCase();
+  if (/^(F|FG|L)\b/.test(c)) return 'Sea-Floor-Text-Mud';
+  if (/^(R|P|PD|PS)\b/.test(c)) return 'Sea-Floor-Text-Rock';
+  if (/^(CO|CL)\b/.test(c)) return 'Sea-Floor-Text-Coral';
+  if (/^A\b/.test(c)) return 'Sea-Floor-Text-Sand';
+  return 'Symbol-Spot-Black';
+}
+async function fetchSHN(bbox, polygon, onStep) {
+  const inArea = (la, lo) => la >= bbox[0] && la <= bbox[2] && lo >= bbox[1] && lo <= bbox[3] &&
+    (!polygon || pointInPoly(la, lo, polygon));
+  const out = [], failed = [];
+  const base = (id, cat, lat, lon, extra) => Object.assign({ id, osmType: null, src: 'SHN (oficial)', lat, lon,
+    type: cat, cat, tags: {}, colour: '', web: '', lit: false }, extra);
+  const step = async (cat, label, fn) => {
+    if (!checked[cat]) return;
+    onStep && onStep(label);
+    try { await fn(); } catch (err) { failed.push('SHN ' + label + ' (' + err.message + ')'); }
+  };
+  const today = new Date().toLocaleDateString('es-AR');
+
+  await step('shn_avisos', 'radioavisos', async () => {
+    const gj = await fetchJSON(`${SHN_API}/Radioavisos/Geoportal/GeoJson`);
+    const feats = (gj.features || []).filter(f => {
+      const c = f.geometry && f.geometry.coordinates;
+      return c && inArea(c[1], c[0]);
+    });
+    for (const f of feats) {
+      const id = f.properties.idAviso;
+      let d = {};
+      try { d = await fetchJSON(`${SHN_API}/Radioavisos/${id}`, 20000); } catch { /* sin detalle */ }
+      let lines = [];
+      try { if (d.geoJson) lines = geoLines(JSON.parse(d.geoJson)); } catch { }
+      const [lon, lat] = f.geometry.coordinates;
+      const fecha = d.fecha ? new Date(d.fecha).toLocaleDateString('es-AR') : '';
+      out.push(base(`shn/aviso/${id}`, 'shn_avisos', lat, lon, {
+        name: `Radioaviso ${f.properties.aviso}`, sym: 'Hazard-Warning', lines, trackColor: 'Red', cssColor: '#e53935',
+        desc: [`Radioaviso ${d.numero || f.properties.aviso} · ${d.tipoAviso || f.properties.tipo}${fecha ? ' · emitido ' + fecha : ''}`,
+          (d.textoEsp || '(sin texto)').trim(),
+          `Vigente al ${today}. Los avisos cambian: verificar los vigentes antes de zarpar.`,
+          'Fuente: SHN – Geoportal (radioavisos)'].join('\n')
+      }));
+    }
+  });
+
+  await step('shn_faros', 'faros', async () => {
+    for (const f of await wfs('SHN:faros', bbox)) {
+      const [lon, lat] = f.geometry.coordinates; const p = f.properties;
+      if (!inArea(lat, lon)) continue;
+      const lines = [p.SinServicio ? 'FARO SIN SERVICIO' : 'Faro (SHN)'];
+      if (p.NOCTURNA) lines.push('Luz: ' + p.NOCTURNA);
+      if (p.DIURNA) lines.push('Diurna: ' + p.DIURNA);
+      if (p.DESCRIPTECNICA) lines.push(p.DESCRIPTECNICA);
+      if (p.DESCRIPCION) lines.push(p.DESCRIPCION);
+      if (p.NROINTERNACIONAL) lines.push('N° internacional: ' + p.NROINTERNACIONAL);
+      if (p.CONGUARDIA === 'True') lines.push('Con guardia');
+      if (p.HISTORIA) lines.push('Historia: ' + (p.HISTORIA.length > 300 ? p.HISTORIA.slice(0, 300) + '…' : p.HISTORIA));
+      lines.push('Fuente: SHN – Geoportal (faros)');
+      out.push(base(`shn/faro/${f.id}`, 'shn_faros', lat, lon, {
+        name: (p.OBJNAM || 'Faro') + (p.SinServicio ? ' (SIN SERVICIO)' : ''),
+        sym: p.SinServicio ? 'Hazard-Warning' : 'Hazard-Lighthouse', lit: true, desc: lines.join('\n')
+      }));
+    }
+  });
+
+  await step('shn_curvas', 'veriles', async () => {
+    for (const f of await wfs('IDERA:curvas_batimetricas', bbox)) {
+      const lines = clipLines(geoLines(f.geometry), inArea).map(l => simplify(l));
+      if (!lines.length) continue;
+      const d = f.properties.crv;
+      const [gc, css] = VERIL_COLOR(d);
+      out.push(base(`shn/veril/${f.id}`, 'shn_curvas', lines[0][0][0], lines[0][0][1], {
+        name: `Veril ${d} m`, sym: 'Symbol-Empty', lines, trackOnly: true, trackColor: gc, cssColor: css,
+        desc: `Curva batimétrica de ${d} m (profundidad referida al plano de reducción de la carta).\nFuente: SHN / IDERA`
+      }));
+    }
+  });
+
+  await step('shn_fondo', 'calidad de fondo', async () => {
+    for (const f of await wfs('SHN:Calidad_Fondo', bbox)) {
+      const [lon, lat] = f.geometry.coordinates; const q = f.properties.CALIDAD || '?';
+      if (!inArea(lat, lon)) continue;
+      out.push(base(`shn/fondo/${f.id}`, 'shn_fondo', lat, lon, {
+        name: `Fondo: ${q}`, sym: fondoSym(q),
+        desc: `Calidad de fondo: ${q} (abreviaturas de carta SHN; ej. A = arena, L = limo, F = fango, Ac = arcilla, c = conchilla; ver Carta 1 del SHN)\nFuente: SHN – Geoportal`
+      }));
+    }
+  });
+
+  await step('shn_enc', 'índice de cartas', async () => {
+    for (const tn of ['SHN:ENC_Costera', 'SHN:ENC_Aproche', 'SHN:CR1_Parana II', 'SHN:Croquis_1_II']) {
+      for (const f of await wfs(tn, bbox)) {
+        const lines = geoLines(f.geometry); const p = f.properties;
+        if (!lines.length) continue;
+        out.push(base(`shn/enc/${f.id}`, 'shn_enc', lines[0][0][0], lines[0][0][1], {
+          name: `${p.OBJNAM || ''} ${p.INFORM || ''}`.trim(), sym: 'Symbol-Empty', lines, trackOnly: true,
+          trackColor: 'DarkGray', cssColor: '#607d8b',
+          desc: [p.OBJTIP, p.INFORM, p.NINFOM, 'Límite de la carta / lámina. Fuente: SHN – Geoportal'].filter(Boolean).join('\n')
+        }));
+      }
+    }
+  });
+  return { marks: out, failed };
+}
+
 let lastPolygon = null;
 async function doFetch() {
   const area = queryArea();
@@ -1080,15 +1264,24 @@ async function doFetch() {
   const t0 = performance.now();
   try {
     if (!activeGroups().length) { setStatus('Tildá al menos una categoría.', 'warn'); return; }
-    const { els, failed } = await overpass(b, (url, method, part) => setStatus(
+    let els = [], failed = [];
+    try {
+      ({ els, failed } = await overpass(b, (url, method, part) => setStatus(
       (url ? `Consultando ${new URL(url).host} (${method})` : method) + (part ? ` · ${part}` : '') +
-      '…\n(se baja por grupos y tramos; puede tardar unos minutos)'), area.polygon);
-    loadElements(els, `encontradas en ${((performance.now() - t0) / 1000).toFixed(1)} s`);
+      '…\n(se baja por grupos y tramos; puede tardar unos minutos)'), area.polygon));
+    } catch (err) { failed = ['OSM: ' + err.message]; }
+    let shnMarks = [];
+    if (activeGroups().includes('shn')) {
+      const r = await fetchSHN(b, area.polygon, label => setStatus(`Consultando SHN: ${label}…`));
+      shnMarks = r.marks; failed.push(...r.failed);
+    }
+    if (!els.length && !shnMarks.length && failed.length) throw new Error(failed.join('\n'));
+    loadElements(els, `encontradas en ${((performance.now() - t0) / 1000).toFixed(1)} s`, shnMarks);
     if (failed.length) setStatus($('status').textContent +
       `\n\nNo se pudo bajar: ${failed.join(', ')}. Los servidores están saturados; probá de nuevo en un rato.`, 'warn');
   } catch (err) {
     const local = location.protocol === 'file:';
-    setStatus(`Error al consultar Overpass: ${err.message}\n\n` + (local
+    setStatus(`Error al consultar: ${err.message}\n\n` + (local
       ? 'Abriste la página desde el disco (file://) y los servidores la bloquean. Subila a GitHub Pages, o usá el plan B: «Abrir en Overpass Turbo» → Exportar → datos crudos JSON → «Cargar archivo».'
       : 'Probá de nuevo en un rato, achicá la zona o usá el plan B con Overpass Turbo.'), 'err');
   } finally {
