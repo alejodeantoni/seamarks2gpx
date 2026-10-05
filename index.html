@@ -140,7 +140,7 @@ ol{padding-left:18px;margin:6px 0}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
 'use strict';
-const VERSION = '1.6.1';
+const VERSION = '1.6.2';
 
 /* ---------- utilidades DOM ---------- */
 const $ = id => document.getElementById(id);
@@ -663,42 +663,42 @@ const ENDPOINTS = [
 ];
 /* Consultas por grupo: livianas (solo claves indexadas, sin búsquedas espaciales caras) */
 const RESTR = 'restricted_area|military_area|cable_area|pipeline_area|cable_submarine|pipeline_submarine|dumping_ground|marine_farm|precautionary_area|seaplane_landing_area';
+/* Solo comparaciones exactas clave=valor: usan el índice del servidor y son rápidas aun en Buenos Aires.
+   (Las regex sobre valores obligan a recorrer TODOS los comercios/amenities de la zona y dan 504.) */
+const eq = (k, vals, prefix = 'nwr', extra = '') => vals.map(v => `${prefix}["${k}"="${v}"]${extra};`).join('');
 const QUERY_PARTS = {
   marks: 'nwr["seamark:type"];',
   svc:
-    'nwr["leisure"~"^(marina|slipway)$"];' +
-    'nwr["waterway"~"^(fuel|boatyard|slipway)$"];' +
+    eq('leisure', ['marina', 'slipway']) +
+    eq('waterway', ['fuel', 'boatyard', 'slipway']) +
     'nwr["amenity"="fuel"]["boat"="yes"];' +
-    'nwr["amenity"~"^(boat_storage|ferry_terminal)$"];' +
-    'nwr["craft"~"^(boatbuilder|sailmaker)$"];' +
-    'nwr["shop"~"^(boat|outboard_motor|marine)$"];' +
-    'nwr["club"]["sport"~"sailing|rowing|canoe|kayak|motorboat|water_ski"];' +
-    'nwr["leisure"="sports_centre"]["sport"~"sailing|rowing|canoe|kayak|motorboat|water_ski"];' +
-    'nwr["club"]["name"~"[Yy]acht|[Nn][aá]utico"];' +
-    'nwr["seamark:type"~"^(harbour|small_craft_facility)$"];',
+    eq('amenity', ['boat_storage', 'ferry_terminal']) +
+    eq('craft', ['boatbuilder', 'sailmaker']) +
+    eq('shop', ['boat', 'outboard_motor', 'marine']) +
+    eq('sport', ['sailing', 'rowing', 'canoe', 'kayak', 'motorboat', 'water_ski']) +
+    eq('club', ['yacht', 'sailing', 'rowing']),
   sec:
     'nwr["amenity"="police"]["name"~"[Pp]refectura|[Gg]uardacostas"];' +
-    'nwr["amenity"="police"]["operator"~"[Pp]refectura"];' +
-    'nwr["emergency"~"^(water_rescue|coast_guard|lifeguard|lifeguard_tower|lifeguard_base|lifeguard_platform)$"];' +
-    'nwr["seamark:type"~"^(coastguard_station|rescue_station|bridge)$"];' +
-    'nwr["amenity"="hospital"];nwr["healthcare"="hospital"];' +
-    // puentes: los cargados como puente náutico, los de rutas principales y ferroviarios, y los móviles
-    'nwr["man_made"="bridge"];way["waterway"]["maxheight"];' +
-    'way["bridge"]["bridge"!="no"]["highway"~"^(motorway|trunk|primary|secondary|tertiary)$"];' +
-    'way["bridge"]["bridge"!="no"]["railway"~"^(rail|light_rail|narrow_gauge)$"];' +
-    'way["bridge"="movable"];'
+    eq('emergency', ['water_rescue', 'coast_guard', 'lifeguard', 'lifeguard_tower', 'lifeguard_base', 'lifeguard_platform']) +
+    eq('seamark:type', ['coastguard_station', 'rescue_station', 'bridge']) +
+    eq('amenity', ['hospital']) +
+    eq('man_made', ['bridge']) +
+    eq('bridge', ['movable'], 'way') +
+    eq('highway', ['motorway', 'trunk', 'primary', 'secondary', 'tertiary'], 'way', '["bridge"]["bridge"!="no"]') +
+    eq('railway', ['rail', 'light_rail', 'narrow_gauge'], 'way', '["bridge"]["bridge"!="no"]')
 };
+const RESTR_GEOM = RESTR.split('|').map(v => `nwr["seamark:type"="${v}"];`).join('');
 const GROUP_NAMES = { marks: 'marcas náuticas', svc: 'servicios', sec: 'seguridad' };
 function activeGroups() {
   const g = new Set();
   for (const c of CATEGORIES) if (checked[c.id] && c.group !== 'mine') g.add(c.group || 'marks');
   return ['marks', 'svc', 'sec'].filter(x => g.has(x));
 }
-function overpassQuery(bbox, groups = ['marks', 'svc', 'sec'], timeout = 60) {
+function overpassQuery(bbox, groups = ['marks', 'svc', 'sec'], timeout = 45) {
   const [s, w, n, e] = bbox;
-  let q = `[out:json][timeout:${timeout}][bbox:${s},${w},${n},${e}];(` +
+  let q = `[out:json][timeout:${timeout}][maxsize:67108864][bbox:${s},${w},${n},${e}];(` +
     groups.map(g => QUERY_PARTS[g]).join('') + ');out center tags qt;';
-  if (groups.includes('sec')) q += `nwr["seamark:type"~"^(${RESTR})$"];out geom qt;`;
+  if (groups.includes('sec')) q += `(${RESTR_GEOM});out geom qt;`;
   return q;
 }
 let goodEndpoint = null;   // el último servidor que respondió bien se prueba primero
