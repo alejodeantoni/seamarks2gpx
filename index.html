@@ -84,9 +84,9 @@ ol{padding-left:18px;margin:6px 0}
     <button id="useView">Usar vista del mapa</button>
   </div>
 
-  <h2>2 · Descargar de OSM (marcas + servicios)</h2>
+  <h2>2 · Descargar de OSM</h2>
   <div class="row">
-    <button class="primary" id="fetch">Buscar marcas y servicios</button>
+    <button class="primary" id="fetch">Buscar en OSM</button>
   </div>
   <div class="status" id="status">Elegí una zona y tocá «Buscar».</div>
   <details id="planb">
@@ -105,7 +105,8 @@ ol{padding-left:18px;margin:6px 0}
 
   <h2>3 · Categorías</h2>
   <div class="cats" id="cats"></div>
-  <label class="check"><input type="checkbox" id="vizName"> Mostrar nombres en la carta (OpenCPN)</label>
+  <label class="check"><input type="checkbox" id="vizName"> Mostrar nombres en la carta (los puentes siempre muestran la altura)</label>
+  <label class="check"><input type="checkbox" id="zoneTracks" checked> Dibujar límites de zonas y cables (tracks)</label>
   <div class="row">
     <button class="primary" id="dlAll" disabled>Descargar GPX (seleccionadas)</button>
   </div>
@@ -127,7 +128,7 @@ ol{padding-left:18px;margin:6px 0}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
 'use strict';
-const VERSION = '1.4.0';
+const VERSION = '1.5.0';
 
 /* ---------- utilidades DOM ---------- */
 const $ = id => document.getElementById(id);
@@ -173,7 +174,7 @@ const CATEGORIES = [
   { id: 'lights',   label: 'Faros y luces',           color: '#f5a623', def: true,  types: ['light', 'light_major', 'light_minor', 'light_vessel', 'light_float', 'landmark'] },
   { id: 'hazards',  label: 'Peligros (naufragios, rocas, obstrucciones)', color: '#7b3fa0', def: true, types: ['wreck', 'rock', 'obstruction'] },
   { id: 'harbour',  label: 'Fondeaderos, amarras, puertos', color: '#1f77b4', def: true, types: ['anchorage', 'anchor_berth', 'mooring', 'harbour', 'small_craft_facility', 'berth'] },
-  { id: 'other',    label: 'Otros (puentes, cables, avisos…)', color: '#8c8c8c', def: false, types: [] },
+  { id: 'other',    label: 'Otros (avisos, señales, km…)', color: '#8c8c8c', def: false, types: [] },
   // --- Servicios náuticos (etiquetas generales de OSM, no seamark) ---
   { id: 'svc_marina',  group: 'svc', label: 'Marinas y puertos deportivos', color: '#0b6bcb', def: true, types: [] },
   { id: 'svc_club',    group: 'svc', label: 'Clubes náuticos',              color: '#17becf', def: true, types: [] },
@@ -181,8 +182,18 @@ const CATEGORIES = [
   { id: 'svc_fuel',    group: 'svc', label: 'Combustible',                  color: '#e4572e', def: true, types: [] },
   { id: 'svc_slip',    group: 'svc', label: 'Rampas y varaderos',           color: '#2ca02c', def: true, types: [] },
   { id: 'svc_yard',    group: 'svc', label: 'Astilleros, talleres y náuticas', color: '#9467bd', def: true, types: [] },
-  { id: 'svc_ferry',   group: 'svc', label: 'Terminales de ferry / lanchas', color: '#bcbd22', def: false, types: [] }
+  { id: 'svc_ferry',   group: 'svc', label: 'Terminales de ferry / lanchas', color: '#bcbd22', def: false, types: [] },
+  // --- Seguridad y restricciones ---
+  { id: 'sec_pna',       group: 'sec', label: 'Prefectura / guardacostas / salvamento', color: '#003f88', def: true, types: [] },
+  { id: 'sec_lifeguard', group: 'sec', label: 'Guardavidas',                 color: '#ff6f00', def: true, types: [] },
+  { id: 'sec_hospital',  group: 'sec', label: 'Hospitales',                  color: '#c2185b', def: true, types: [] },
+  { id: 'sec_bridge',    group: 'sec', label: 'Puentes (altura libre)',      color: '#555555', def: true, types: ['bridge'] },
+  { id: 'sec_restricted', group: 'sec', label: 'Zonas restringidas, cables y ductos', color: '#d81b60', def: true,
+    types: ['restricted_area', 'military_area', 'cable_area', 'pipeline_area', 'cable_submarine', 'pipeline_submarine',
+            'dumping_ground', 'marine_farm', 'precautionary_area', 'seaplane_landing_area'] }
 ];
+const GROUP_LABEL = { marks: 'Marcas náuticas', svc: 'Servicios náuticos', sec: 'Seguridad y restricciones' };
+const isPoi = cat => /^(svc|sec)_/.test(cat);
 const TYPE_TO_CAT = {};
 CATEGORIES.forEach(c => c.types.forEach(t => TYPE_TO_CAT[t] = c.id));
 
@@ -205,7 +216,18 @@ const TYPE_ES = {
   coastguard_station: 'Prefectura / guardacostas', rescue_station: 'Estación de salvamento',
   restricted_area: 'Zona restringida', fairway: 'Canal', recommended_track: 'Derrota recomendada',
   gate: 'Compuerta', lock_basin: 'Esclusa', dam: 'Represa', distance_mark: 'Marca de distancia (km)',
-  pilot_boarding: 'Embarque de práctico', sea_area: 'Zona marítima', shoreline_construction: 'Construcción costera'
+  pilot_boarding: 'Embarque de práctico', sea_area: 'Zona marítima', shoreline_construction: 'Construcción costera',
+  military_area: 'Zona militar', cable_area: 'Zona de cables', pipeline_area: 'Zona de ductos',
+  dumping_ground: 'Zona de vertido', marine_farm: 'Acuicultura', precautionary_area: 'Zona de precaución',
+  seaplane_landing_area: 'Zona de hidroaviones'
+};
+const RESTRICTION_ES = {
+  no_anchoring: 'prohibido fondear', restricted_anchoring: 'fondeo restringido', no_fishing: 'prohibido pescar',
+  restricted_fishing: 'pesca restringida', no_trawling: 'prohibida la pesca de arrastre', no_entry: 'prohibido el ingreso',
+  restricted_entry: 'ingreso restringido', no_wake: 'navegar sin producir olas', no_diving: 'prohibido bucear',
+  no_dredging: 'prohibido dragar', no_mooring: 'prohibido amarrar', no_swimming: 'prohibido nadar',
+  area_to_be_avoided: 'zona a evitar', speed_restricted: 'velocidad restringida', no_landing: 'prohibido desembarcar',
+  no_sport_fishing: 'prohibida la pesca deportiva', no_hunting: 'prohibido cazar'
 };
 const SHORT = {
   lateral: 'Lat.', cardinal: 'Card.', buoy_isolated_danger: 'Pel. aislado', beacon_isolated_danger: 'Pel. aislado',
@@ -223,7 +245,9 @@ const CAT_ES = {
   marina: 'marina', fishing: 'pesquero', ferry: 'ferry', ramp: 'rampa', slipway: 'varadero',
   fuel_station: 'combustible', visitor_berth: 'amarre de visitantes', boatyard: 'astillero', sailmaker: 'velería',
   tower: 'torre', chimney: 'chimenea', mast: 'mástil', church: 'iglesia', cross: 'cruz', flagstaff: 'asta de bandera',
-  general: 'general', light: 'luz'
+  general: 'general', light: 'luz', military: 'militar', nature_reserve: 'reserva natural',
+  bird_sanctuary: 'santuario de aves', swimming: 'zona de baño', ferry_crossing: 'cruce de ferry',
+  fixed: 'fijo', opening: 'móvil', bascule: 'basculante', swing: 'giratorio', lifting: 'levadizo', draw: 'levadizo'
 };
 const COLOURS = {
   white: 'blanco', black: 'negro', red: 'rojo', green: 'verde', blue: 'azul', yellow: 'amarillo',
@@ -295,6 +319,15 @@ function symbolFor(m) {
       if (type === 'rock') return /dry|part/.test(wl) ? 'Hazard-Rock-Exposed' : 'Hazard-Rock-Awash';
       return /dry/.test(wl) ? 'Hazard-Obstruction-Dry' : 'Hazard-Obstruction-Shallow';
     }
+    case 'sec_restricted': {
+      const restr = t[`seamark:${type}:restriction`] || '';
+      if (/no_anchoring|restricted_anchoring/.test(restr)) return '1st-No-Anchoring';
+      if (/cable|pipeline/.test(type)) return 'Hazard-Power-Cable';
+      if (type === 'military_area' || /no_entry/.test(restr)) return 'Hazard-Danger';
+      if (type === 'marine_farm') return 'Hazard-Fish-Aquatic-Farm';
+      if (type === 'dumping_ground') return 'Hazard-Pollution-Oil';
+      return 'Hazard-Warning';
+    }
     case 'harbour':
       if (type === 'anchorage' || type === 'anchor_berth') return '1st-Anchorage';
       if (type === 'mooring') return cat === 'pile' || cat === 'dolphin' ? 'Marks-Mooring-Pile' : cat === 'buoy' ? 'Marks-Mooring-Buoy' : 'Marks-Mooring-Float';
@@ -336,10 +369,18 @@ function formatLights(tags) {
 /* ---------- servicios náuticos ---------- */
 const SVC_LABEL = {
   svc_marina: 'Marina', svc_club: 'Club náutico', svc_storage: 'Guardería náutica', svc_fuel: 'Combustible náutico',
-  svc_slip: 'Rampa / varadero', svc_yard: 'Astillero / taller / náutica', svc_ferry: 'Terminal de ferry'
+  svc_slip: 'Rampa / varadero', svc_yard: 'Astillero / taller / náutica', svc_ferry: 'Terminal de ferry',
+  sec_pna: 'Prefectura / guardacostas / salvamento', sec_lifeguard: 'Guardavidas', sec_hospital: 'Hospital',
+  sec_bridge: 'Puente'
 };
 const WATER_SPORTS = /sailing|rowing|canoe|kayak|motorboat|water_ski|yachting|boat/;
 function serviceCat(t) {
+  const who = `${t.name || ''} ${t.operator || ''}`;
+  if (t['seamark:type'] === 'coastguard_station' || t['seamark:type'] === 'rescue_station' ||
+      t.emergency === 'coast_guard' || t.emergency === 'water_rescue' ||
+      (t.amenity === 'police' && /prefectura|guardacostas|coast ?guard/i.test(who))) return 'sec_pna';
+  if (/^lifeguard/.test(t.emergency || '')) return 'sec_lifeguard';
+  if (t.amenity === 'hospital' || t.healthcare === 'hospital') return 'sec_hospital';
   if (t.leisure === 'marina' || t['seamark:small_craft_facility:category'] === 'marina' || t['seamark:harbour:category'] === 'marina') return 'svc_marina';
   if (t.waterway === 'fuel' || (t.amenity === 'fuel' && (t.boat === 'yes' || t.waterway))) return 'svc_fuel';
   if (t.amenity === 'boat_storage' || /boat_?storage|dry_stack/.test(t['seamark:small_craft_facility:category'] || '')) return 'svc_storage';
@@ -361,6 +402,9 @@ function serviceSym(cat, t) {
     case 'svc_slip':    return 'Service-Public-Landing';
     case 'svc_yard':    return t.shop ? 'Service-Chandlery' : 'Service-Repairs';
     case 'svc_ferry':   return 'Service-Dock';
+    case 'sec_pna':       return 'Authority-Police';
+    case 'sec_lifeguard': return '1st-Man-Overboard';
+    case 'sec_hospital':  return 'Authority-Health';
   }
   return 'Info-Info';
 }
@@ -388,6 +432,8 @@ function parseService(e, cat, lat, lon) {
   if (email) lines.push(`Email: ${email}`);
   const web = t.website || t['contact:website'] || t.url;
   if (web) lines.push(`Web: ${web}`);
+  if (t['emergency:phone']) lines.push(`Tel. emergencias: ${t['emergency:phone']}`);
+  if (cat === 'sec_hospital' && t.emergency === 'yes') lines.push('Guardia de emergencias: sí');
   if (t.opening_hours) lines.push(`Horario: ${t.opening_hours}`);
   if (t.description || t.note) lines.push(`Info: ${t.description || t.note}`);
   lines.push(`Fuente: OpenStreetMap ${e.type}/${e.id} (no oficial)`);
@@ -398,14 +444,68 @@ function parseService(e, cat, lat, lon) {
   };
 }
 
+/* ---------- puentes ---------- */
+function isBridge(t) {
+  return t['seamark:type'] === 'bridge' || t.man_made === 'bridge' ||
+    (t.bridge && t.bridge !== 'no' && (t.highway || t.railway)) ||
+    (t.waterway && (t.maxheight || t['maxheight:physical']));
+}
+function parseBridge(e, lat, lon) {
+  const t = e.tags || {};
+  const sb = k => t['seamark:bridge:' + k];
+  // Ojo: en un camino, "maxheight" es la altura para vehículos; solo vale como altura libre si está en el curso de agua.
+  const h = sb('clearance_height') || sb('vertical_clearance') || (t.waterway ? (t.maxheight || t['maxheight:physical']) : '');
+  const hc = sb('clearance_height_closed'), ho = sb('clearance_height_open');
+  const hz = sb('horizontal_clearance') || sb('clearance_width') || (t.waterway ? t.maxwidth : '');
+  const mov = t['bridge:movable'] || (sb('category') && sb('category') !== 'fixed' ? sb('category') : '');
+  const kind = t.railway ? 'Puente ferroviario' : t.highway ? 'Puente vial' : 'Puente';
+  const base = t.name || t['seamark:name'] || t['bridge:name'] || (t.ref ? `${kind} ${t.ref}` : kind);
+  const num = v => String(v).replace(/\s*m$/, '');
+  const hTxt = h ? `${num(h)} m` : hc ? `${num(hc)} m cerrado` : '';
+  const lines = [`${kind}${mov ? ' móvil (' + tr(mov, CAT_ES) + ')' : ''}`];
+  if (h) lines.push(`Altura libre: ${num(h)} m`);
+  if (hc) lines.push(`Altura libre cerrado: ${num(hc)} m`);
+  if (ho) lines.push(`Altura libre abierto: ${num(ho)} m`);
+  if (!h && !hc && !ho) lines.push('Altura libre: SIN DATO en OSM — verificar antes de pasar');
+  if (hz) lines.push(`Ancho libre: ${num(hz)} m`);
+  if (t.ref && !base.includes(t.ref)) lines.push(`Ruta: ${t.ref}`);
+  if (t.opening_hours) lines.push(`Horario de apertura: ${t.opening_hours}`);
+  lines.push('Las alturas varían con el nivel del río: verificar con la altura del día.');
+  lines.push(`Fuente: OpenStreetMap ${e.type}/${e.id} (no oficial)`);
+  return {
+    id: `${e.type}/${e.id}`, osmType: e.type, osmId: e.id, lat, lon, type: 'sec_bridge', cat: 'sec_bridge', tags: t,
+    colour: '', lit: false, web: '', forceName: true,
+    name: hTxt ? `${base} · ${hTxt}` : `${base} · altura s/d`, desc: lines.join('\n'),
+    sym: (h || hc) ? (mov ? 'Landmarks-Bridge2' : 'Landmarks-Bridge1') : 'Landmarks-Bridge3',
+    noData: !(h || hc || ho)
+  };
+}
+
+/* Geometría (límites de zonas, cables) a partir de "out geom" de Overpass */
+function geomLines(e) {
+  const toLL = g => (g || []).filter(Boolean).map(p => [p.lat, p.lon]);
+  if (Array.isArray(e.geometry)) return [toLL(e.geometry)].filter(l => l.length > 1);
+  if (Array.isArray(e.members)) return e.members
+    .filter(m => m.geometry && (!m.role || m.role === 'outer'))
+    .map(m => toLL(m.geometry)).filter(l => l.length > 1);
+  return [];
+}
+
 /* ---------- parseo de un elemento Overpass ---------- */
 function parseElement(e) {
   const tags = e.tags || {};
   const type = (tags['seamark:type'] || '').split(';')[0].trim();
-  const lat = e.lat ?? e.center?.lat, lon = e.lon ?? e.center?.lon;
+  let lat = e.lat ?? e.center?.lat, lon = e.lon ?? e.center?.lon;
+  const glines = geomLines(e);
+  if ((lat == null || lon == null) && glines.length) {
+    const pts = glines.flat();
+    lat = pts.reduce((a, p) => a + p[0], 0) / pts.length;
+    lon = pts.reduce((a, p) => a + p[1], 0) / pts.length;
+  }
   if (lat == null || lon == null) return null;
+  if (isBridge(tags)) return parseBridge(e, lat, lon);
   const svc = serviceCat(tags);
-  if (svc && (!type || ['harbour', 'small_craft_facility', 'berth', 'mooring'].includes(type))) return parseService(e, svc, lat, lon);
+  if (svc && (!type || ['harbour', 'small_craft_facility', 'berth', 'mooring', 'coastguard_station', 'rescue_station'].includes(type))) return parseService(e, svc, lat, lon);
   if (!type) return null;
   const g = k => tags[`seamark:${type}:${k}`];
   const cat = TYPE_TO_CAT[type] || 'other';
@@ -426,6 +526,11 @@ function parseElement(e) {
     lines.push(`Marca de tope: ${tr(tags['seamark:topmark:shape'], TOPMARK)}${tc ? ' ' + tr(tc, COLOURS) : ''}`);
   }
   lights.forEach((l, i) => lines.push(`${lights.length > 1 ? 'Luz ' + (i + 1) : 'Luz'}: ${l}`));
+  if (cat === 'sec_restricted') {
+    if (g('restriction')) lines.push(`Restricción: ${tr(g('restriction'), RESTRICTION_ES)}`);
+    if (/cable|pipeline/.test(type)) lines.push('No fondear ni arrastrar sobre cables o ductos.');
+    if (g('category')) lines.push(`Categoría: ${tr(g('category'), CAT_ES)}`);
+  }
   if (g('value_of_sounding')) lines.push(`Profundidad sobre el peligro: ${g('value_of_sounding')} m`);
   if (g('water_level')) lines.push(`Nivel de agua: ${tr(g('water_level'), WATER_LEVEL)}`);
   if (g('height') && cat !== 'lights') lines.push(`Altura: ${g('height')} m`);
@@ -440,25 +545,29 @@ function parseElement(e) {
   const osmName = tags['seamark:name'] || tags.name || tags['seamark:light:name'];
   let shortName;
   if (cat === 'lateral' || cat === 'cardinal') shortName = `${SHORT[cat]} ${tr(category, CAT_ES)}`.trim();
+  else if (cat === 'sec_restricted') shortName = title + (g('restriction') ? ' – ' + tr(g('restriction'), RESTRICTION_ES) : '');
   else shortName = SHORT[type] || title;
   if (lights[0]) shortName += ' ' + lights[0];
 
   const m = {
     id: `${e.type}/${e.id}`, osmType: e.type, osmId: e.id, lat, lon, type, cat, tags, colour,
-    name: osmName || shortName, desc: lines.join('\n'), lit: lights.length > 0
+    name: osmName || shortName, desc: lines.join('\n'), lit: lights.length > 0,
+    lines: cat === 'sec_restricted' ? glines : null
   };
   m.sym = symbolFor(m);
   return m;
 }
 
 /* ---------- GPX (construido con DOM XML) ---------- */
-function buildGPX(marks, title, showNames) {
+function buildGPX(marks, title, showNames, withTracks = true) {
   const NS = 'http://www.topografix.com/GPX/1/1', OC = 'http://www.opencpn.org';
   const doc = document.implementation.createDocument(NS, 'gpx', null);
   const root = doc.documentElement;
   root.setAttribute('version', '1.1');
   root.setAttribute('creator', `Seamarks2GPX v${VERSION}`);
+  const GX = 'http://www.garmin.com/xmlschemas/GpxExtensions/v3';
   root.setAttributeNS('http://www.w3.org/2000/xmlns/', 'xmlns:opencpn', OC);
+  root.setAttributeNS('http://www.w3.org/2000/xmlns/', 'xmlns:gpxx', GX);
   const nl = (p, depth) => p.appendChild(doc.createTextNode('\n' + '  '.repeat(depth)));
   const add = (parent, name, text, depth) => {
     nl(parent, depth);
@@ -490,12 +599,39 @@ function buildGPX(marks, title, showNames) {
     add(w, 'sym', m.sym, 2);
     add(w, 'type', TYPE_ES[m.type] || SVC_LABEL[m.type] || m.type, 2);
     const ext = add(w, 'extensions', null, 2);
-    for (const [k, v] of [['viz', '1'], ['viz_name', showNames ? '1' : '0']]) {
+    for (const [k, v] of [['viz', '1'], ['viz_name', showNames || m.forceName ? '1' : '0']]) {
       nl(ext, 3);
       const x = doc.createElementNS(OC, 'opencpn:' + k); x.textContent = v; ext.appendChild(x);
     }
     nl(ext, 2);
     nl(w, 1);
+  }
+  // Límites de zonas y cables como tracks (GPX exige los trk después de todos los wpt)
+  if (withTracks) for (const m of marks) {
+    (m.lines || []).forEach((line, i, arr) => {
+      const trk = add(root, 'trk', null, 1);
+      add(trk, 'name', arr.length > 1 ? `${m.name} (${i + 1})` : m.name, 2);
+      add(trk, 'desc', m.desc, 2);
+      const link = add(trk, 'link', null, 2);
+      link.setAttribute('href', `https://www.openstreetmap.org/${m.osmType}/${m.osmId}`);
+      add(trk, 'type', TYPE_ES[m.type] || m.type, 2);
+      const ext = add(trk, 'extensions', null, 2);
+      nl(ext, 3);
+      const te = doc.createElementNS(GX, 'gpxx:TrackExtension');
+      const dc = doc.createElementNS(GX, 'gpxx:DisplayColor');
+      dc.textContent = /military|no_entry/.test(m.type + (m.tags[`seamark:${m.type}:restriction`] || '')) ? 'Red' : 'Magenta';
+      te.appendChild(dc); ext.appendChild(te);
+      nl(ext, 3);
+      const vz = doc.createElementNS(OC, 'opencpn:viz'); vz.textContent = '1'; ext.appendChild(vz);
+      nl(ext, 2);
+      const seg = add(trk, 'trkseg', null, 2);
+      for (const [la, lo] of line) {
+        const pt = add(seg, 'trkpt', null, 3);
+        pt.setAttribute('lat', la.toFixed(7)); pt.setAttribute('lon', lo.toFixed(7));
+      }
+      nl(seg, 2);
+      nl(trk, 1);
+    });
   }
   nl(root, 0);
   return '<?xml version="1.0" encoding="UTF-8"?>\n' + new XMLSerializer().serializeToString(doc);
@@ -510,7 +646,17 @@ const ENDPOINTS = [
 ];
 function overpassQuery(bbox, timeout = 90) {
   const [s, w, n, e] = bbox;
-  return `[out:json][timeout:${timeout}][bbox:${s},${w},${n},${e}];(` +
+  const RESTR = 'restricted_area|military_area|cable_area|pipeline_area|cable_submarine|pipeline_submarine|dumping_ground|marine_farm|precautionary_area|seaplane_landing_area';
+  return `[out:json][timeout:${timeout}][bbox:${s},${w},${n},${e}];` +
+    'way["waterway"~"^(river|canal)$"]->.ww;(' +
+    // seguridad
+    'nwr["amenity"="police"]["name"~"[Pp]refectura|[Gg]uardacostas"];' +
+    'nwr["amenity"="police"]["operator"~"[Pp]refectura"];' +
+    'nwr["emergency"~"^(water_rescue|coast_guard|lifeguard|lifeguard_tower|lifeguard_base|lifeguard_platform)$"];' +
+    'nwr["amenity"="hospital"];nwr["healthcare"="hospital"];' +
+    // puentes sobre ríos y canales navegables
+    'nwr["man_made"="bridge"];way["waterway"]["maxheight"];' +
+    'way(around.ww:0)["bridge"]["bridge"!="no"]["highway"!~"^(footway|path|cycleway|steps|bridleway|pedestrian)$"];' +
     'nwr["seamark:type"];' +
     'nwr["leisure"~"^(marina|slipway)$"];' +
     'nwr["waterway"~"^(fuel|boatyard|slipway)$"];' +
@@ -521,7 +667,8 @@ function overpassQuery(bbox, timeout = 90) {
     'nwr["club"]["sport"~"sailing|rowing|canoe|kayak|motorboat|water_ski"];' +
     'nwr["leisure"="sports_centre"]["sport"~"sailing|rowing|canoe|kayak|motorboat|water_ski"];' +
     'nwr["club"]["name"~"[Yy]acht|[Nn][aá]utico"];' +
-    `);out center tags qt;`;
+    `);out center tags qt;` +
+    `nwr["seamark:type"~"^(${RESTR})$"];out geom qt;`;
 }
 let goodEndpoint = null;   // el último servidor que respondió bien se prueba primero
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -650,7 +797,7 @@ function zoneLabel() {
 function download(list, suffix) {
   if (!list.length) return;
   const title = `Marcas náuticas OSM – ${suffix}`;
-  const xml = buildGPX(list, title, $('vizName').checked);
+  const xml = buildGPX(list, title, $('vizName').checked, $('zoneTracks').checked);
   const blob = new Blob([xml], { type: 'application/gpx+xml' });
   const a = el('a', { href: URL.createObjectURL(blob), download: `seamarks_${zoneLabel()}_${suffix}.gpx` });
   document.body.append(a); a.click(); a.remove();
@@ -666,7 +813,7 @@ function renderCats() {
   for (const c of CATEGORIES) {
     const grp = c.group || 'marks';
     if (grp !== lastGroup) {
-      box.append(el('div', { class: 'cat-head' }, grp === 'svc' ? 'Servicios náuticos' : 'Marcas náuticas'));
+      box.append(el('div', { class: 'cat-head' }, GROUP_LABEL[grp]));
       lastGroup = grp;
     }
     const n = counts[c.id] || 0;
@@ -705,20 +852,33 @@ function renderMap() {
     const catColor = CATEGORIES.find(c => c.id === m.cat).color;
     const fill = (m.cat === 'lateral' || m.cat === 'cardinal' || m.cat === 'special' || m.cat === 'safe' || m.cat === 'danger')
       ? (COLOUR_CSS[c0] || catColor) : catColor;
+    for (const line of m.lines || []) {
+      L.polyline(line, { color: catColor, weight: 2, dashArray: '6 4', interactive: false }).addTo(layerGroup);
+    }
     L.circleMarker([m.lat, m.lon], {
-      radius: m.cat.startsWith('svc_') ? 7 : m.cat === 'lights' ? 6 : 5,
-      weight: m.cat.startsWith('svc_') ? 2 : 1, color: m.cat.startsWith('svc_') ? '#fff' : '#000',
-      fillColor: fill, fillOpacity: .9
+      radius: isPoi(m.cat) ? 7 : m.cat === 'lights' ? 6 : 5,
+      weight: isPoi(m.cat) ? 2 : 1, color: isPoi(m.cat) ? '#fff' : '#000',
+      fillColor: m.noData ? '#bbbbbb' : fill, fillOpacity: .9
     }).bindPopup(() => popupFor(m)).addTo(layerGroup);
   }
 }
 
 function loadElements(els, label) {
-  const seen = new Set();
-  marks = [];
+  // Un mismo elemento puede venir dos veces (con centro y con geometría): se fusionan.
+  const byId = new Map();
   for (const e of els) {
+    const k = `${e.type}/${e.id}`, prev = byId.get(k);
+    if (!prev) { byId.set(k, { ...e }); continue; }
+    if (e.geometry) prev.geometry = e.geometry;
+    if (e.members) prev.members = e.members;
+    if (e.center) prev.center = e.center;
+    if (e.lat != null) { prev.lat = e.lat; prev.lon = e.lon; }
+    prev.tags = { ...(prev.tags || {}), ...(e.tags || {}) };
+  }
+  marks = [];
+  for (const e of byId.values()) {
     const m = parseElement(e);
-    if (m && !seen.has(m.id)) { seen.add(m.id); marks.push(m); }
+    if (m) marks.push(m);
   }
   setStatus(marks.length
     ? `${marks.length} marcas ${label}.`
@@ -779,6 +939,8 @@ function init() {
   ['s', 'w', 'n', 'e'].forEach(k => $(k).addEventListener('change', () => { sel.value = 'custom'; store.set('preset', 'custom'); onBBoxChange(); }));
   $('vizName').checked = store.get('vizName', false);
   $('vizName').addEventListener('change', () => store.set('vizName', $('vizName').checked));
+  $('zoneTracks').checked = store.get('zoneTracks', true);
+  $('zoneTracks').addEventListener('change', () => store.set('zoneTracks', $('zoneTracks').checked));
   $('fetch').addEventListener('click', doFetch);
   $('turbo').addEventListener('click', openTurbo);
   $('loadBtn').addEventListener('click', () => $('fileIn').click());
