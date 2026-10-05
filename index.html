@@ -56,7 +56,10 @@ details{margin-top:14px}
 summary{cursor:pointer;font-weight:600}
 ol{padding-left:18px;margin:6px 0}
 .pop h3{margin:0 0 4px;font-size:14px}
-.pop p{margin:0;white-space:pre-line;font-size:12px}
+.pop p{margin:0 0 4px;white-space:pre-line;font-size:12px}
+.pop label{display:block;font-size:12px;margin-top:6px}
+.pop input,.pop textarea,.pop select{font:inherit;font-size:12px;padding:4px;border:1px solid #ccc;border-radius:4px;box-sizing:border-box}
+.pop button{padding:4px 10px;font-size:12px}
 @media (max-width:760px){
   main{grid-template-columns:1fr;grid-template-rows:auto 60vh;height:auto}
   aside{border-right:0;border-bottom:1px solid var(--line)}
@@ -105,6 +108,7 @@ ol{padding-left:18px;margin:6px 0}
 
   <h2>3 · Categorías</h2>
   <div class="cats" id="cats"></div>
+  <p class="note">Solo se buscan los grupos que tengan alguna categoría tildada. Si tildás un grupo nuevo, volvé a tocar «Buscar».</p>
   <label class="check"><input type="checkbox" id="vizName"> Mostrar nombres en la carta (los puentes siempre muestran la altura)</label>
   <label class="check"><input type="checkbox" id="zoneTracks" checked> Dibujar límites de zonas y cables (tracks)</label>
   <div class="row">
@@ -112,12 +116,20 @@ ol{padding-left:18px;margin:6px 0}
   </div>
   <p class="note">Cada categoría también se puede bajar como archivo separado con su botón ⬇.</p>
 
+  <h2>4 · Editar</h2>
+  <p class="note">Tocá una marca en el mapa → <b>✎ Editar</b> para cambiar nombre, descripción o ícono, o borrarla. Los cambios quedan guardados en este navegador y se aplican también en las próximas descargas.</p>
+  <div class="row">
+    <button id="addMark">➕ Agregar marca propia</button>
+    <button id="restoreDel" hidden>Restaurar marcas borradas</button>
+  </div>
+
   <details>
     <summary>Cómo cargarlo en OpenCPN</summary>
     <ol>
       <li><b>Temporal:</b> Administrador de rutas y marcas → pestaña <i>Capas</i> → <i>Capa temporal…</i> y elegí el GPX.</li>
       <li><b>Permanente:</b> copiá el GPX a la carpeta <code>layers</code> de OpenCPN (en Windows: <code>C:\ProgramData\opencpn\layers</code>) y reiniciá.</li>
       <li>Clic en una marca → <i>Propiedades</i> muestra tipo, colores, luz, forma y enlace a OSM.</li>
+      <li><b>Las capas no se pueden editar en OpenCPN.</b> Para editar allá: borrá la capa (pestaña <i>Capas</i>) y en la pestaña <i>Marcas</i> usá <i>Importar GPX…</i>. O editá acá antes de exportar.</li>
     </ol>
   </details>
   <p class="note">Datos © colaboradores de OpenStreetMap (ODbL). Cargados por voluntarios: <b>no oficiales, pueden faltar o estar desactualizados</b>. No reemplazan la cartografía del SHN.</p>
@@ -128,7 +140,7 @@ ol{padding-left:18px;margin:6px 0}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
 'use strict';
-const VERSION = '1.5.0';
+const VERSION = '1.6.1';
 
 /* ---------- utilidades DOM ---------- */
 const $ = id => document.getElementById(id);
@@ -192,7 +204,10 @@ const CATEGORIES = [
     types: ['restricted_area', 'military_area', 'cable_area', 'pipeline_area', 'cable_submarine', 'pipeline_submarine',
             'dumping_ground', 'marine_farm', 'precautionary_area', 'seaplane_landing_area'] }
 ];
-const GROUP_LABEL = { marks: 'Marcas náuticas', svc: 'Servicios náuticos', sec: 'Seguridad y restricciones' };
+CATEGORIES.push({ id: 'mine', group: 'mine', label: 'Mis marcas y agregadas', color: '#00a676', def: true, types: [] });
+const GROUP_LABEL = { marks: 'Marcas náuticas', svc: 'Servicios náuticos', sec: 'Seguridad y restricciones', mine: 'Propias' };
+/* Íconos de serie de OpenCPN 5.x (data/svg/markicons) */
+const ICONS = ['1st-Active-Waypoint','1st-Anchorage','1st-Diamond','1st-Man-Overboard','1st-No-Anchoring','Activity-Campfire','Activity-Camping','Activity-Diving-Scuba-Flag','Activity-Diving-Scuba-Tank','Activity-Diving-Snorkel','Activity-Diving-Spearing','Activity-Fishing','Authority-Customs','Authority-Health','Authority-Immigration','Authority-Police','Authority-Quarantine-Area','Authority-Quarantine-Building','Authority-Quarantine-Flag','Hazard-Airplane','Hazard-Animals-Crocodile','Hazard-Animals-Jellyfish','Hazard-Animals-Shark','Hazard-Danger','Hazard-Dredging','Hazard-Fish-Aquatic-Farm','Hazard-Fish-Lobster-String','Hazard-Fish-Nets','Hazard-Lighthouse','Hazard-Obstruction-Deep','Hazard-Obstruction-Dry','Hazard-Obstruction-Shallow','Hazard-Oil-Platform','Hazard-Overfalls','Hazard-Pollution-Air','Hazard-Pollution-Bio','Hazard-Pollution-Nuclear','Hazard-Pollution-Oil','Hazard-Pollution-Quarantine-Area','Hazard-Power-Cable','Hazard-Power-Line1','Hazard-Power-Line2','Hazard-Rock-Awash','Hazard-Rock-Exposed','Hazard-Sandbar','Hazard-Snag','Hazard-Warning','Hazard-Wind-Farm','Hazard-Wreck1','Hazard-Wreck2','Info-Fish-Haven','Info-Fish-Pelagic','Info-Fish-Reef','Info-Fish-Shark','Info-Fish-Whale','Info-Fish','Info-Info','Info-No-Discharge','Info-Photo','Info-Video','Landmarks-Bridge1','Landmarks-Bridge2','Landmarks-Bridge3','Landmarks-Pier1','Landmarks-Pier2','Landmarks-Pier3','Landmarks-Stream-River','Landmarks-Waterfall','Marks-Active-Waypoint','Marks-Beacon-Danger','Marks-Beacon-SafeWater','Marks-Blank','Marks-Boarding-Location','Marks-Boundary','Marks-Buoy-Danger','Marks-Buoy-Safe-Water','Marks-Buoy-TypeA','Marks-Buoy-TypeB','Marks-Cardinal-East-Lighted','Marks-Cardinal-East','Marks-Cardinal-Nord-Lighted','Marks-Cardinal-Nord','Marks-Cardinal-North-Lighted','Marks-Cardinal-North','Marks-Cardinal-South-Lighted','Marks-Cardinal-South','Marks-Cardinal-West-Lighted','Marks-Cardinal-West','Marks-Caution-Lighted','Marks-Caution','Marks-Danger-Topmark-Lighted','Marks-Danger-Topmark','Marks-Lateral-Port-IALA-A-Lighted','Marks-Lateral-Port-IALA-A','Marks-Lateral-Port-IALA-B-Lighted','Marks-Lateral-Port-IALA-B','Marks-Lateral-Starboard-IALA-A-Lighted','Marks-Lateral-Starboard-IALA-A','Marks-Lateral-Starboard-IALA-B-Lighted','Marks-Lateral-Starboard-IALA-B','Marks-Light-Green','Marks-Light-Red-Green','Marks-Light-Red','Marks-Light-TypeA','Marks-Light-TypeB','Marks-Light-Vessel','Marks-Mooring-Buoy-Super','Marks-Mooring-Buoy','Marks-Mooring-Float','Marks-Mooring-Pile','Marks-New-Danger-Lighted','Marks-New-Danger','Marks-Safe-Water-Lighted','Marks-Safe-Water','Service-Chandlery','Service-Dock-Dinghy','Service-Dock','Service-Food','Service-Fuel-Jerry-Diesel','Service-Fuel-Jerry-Petrol','Service-Fuel-Jerry','Service-Fuel-LPG','Service-Fuel-Pump-Diesel-Petrol','Service-Fuel-Pump-Diesel','Service-Fuel-Pump-Petrol','Service-Grocery1','Service-Grocery2','Service-Haulout','Service-Ice1','Service-Ice2','Service-Ice3','Service-Internet-Cafe','Service-Internet-WiFi','Service-Laundry','Service-Marina','Service-Public-Landing','Service-Pump-Out-Boat','Service-Pump-Out-Facility','Service-Repairs','Service-Water1','Service-Water2','Service-Wine&Dine','Service-Yacht-Club','Symbol-Anchor1','Symbol-Anchor2','Symbol-Anchor3','Symbol-Arrow-Black','Symbol-Arrow-Blue','Symbol-Arrow-Green','Symbol-Arrow-Magenta','Symbol-Arrow-Orange','Symbol-Arrow-Red','Symbol-Arrow-White','Symbol-Arrow-Yellow','Symbol-Circle-Black','Symbol-Circle-Blue','Symbol-Circle-Green','Symbol-Circle-Magenta','Symbol-Circle-Orange','Symbol-Circle-Red','Symbol-Circle-White','Symbol-Circle-Yellow','Symbol-Circle','Symbol-Diamond-Black','Symbol-Diamond-Blue','Symbol-Diamond-Green','Symbol-Diamond-Magenta','Symbol-Diamond-Orange','Symbol-Diamond-Red','Symbol-Diamond-White','Symbol-Diamond-Yellow','Symbol-Empty','Symbol-Exclamation-Black','Symbol-Exclamation-Blue','Symbol-Exclamation-Green','Symbol-Exclamation-Magenta','Symbol-Exclamation-Orange','Symbol-Exclamation-Red','Symbol-Exclamation-White','Symbol-Exclamation-Yellow','Symbol-Pin-Black','Symbol-Pin-Blue','Symbol-Pin-Green','Symbol-Pin-Magenta','Symbol-Pin-Orange','Symbol-Pin-Red','Symbol-Pin-White','Symbol-Pin-Yellow','Symbol-Question-Black','Symbol-Question-Blue','Symbol-Question-Green','Symbol-Question-Magenta','Symbol-Question-Orange','Symbol-Question-Red','Symbol-Question-White','Symbol-Question-Yellow','Symbol-Spot-Black','Symbol-Spot-Blue','Symbol-Spot-Green','Symbol-Spot-Magenta','Symbol-Spot-Orange','Symbol-Spot-Red','Symbol-Spot-White','Symbol-Spot-Yellow','Symbol-Square-Black','Symbol-Square-Blue','Symbol-Square-Green','Symbol-Square-Magenta','Symbol-Square-Orange','Symbol-Square-Red','Symbol-Square-White','Symbol-Square-Yellow','Symbol-Square','Symbol-Star-Black','Symbol-Star-Blue','Symbol-Star-Green','Symbol-Star-Magenta','Symbol-Star-Orange','Symbol-Star-Red','Symbol-Star-White','Symbol-Star-Yellow','Symbol-Tick-Black','Symbol-Tick-Blue','Symbol-Tick-Green','Symbol-Tick-Magenta','Symbol-Tick-Orange','Symbol-Tick-Red','Symbol-Tick-White','Symbol-Tick-Yellow','Symbol-Triangle','Symbol-X-Large-Black','Symbol-X-Large-Blue','Symbol-X-Large-Green','Symbol-X-Large-Magenta','Symbol-X-Large-Orange','Symbol-X-Large-Red','Symbol-X-Large-White','Symbol-X-Large-Yellow','Symbol-X-Small-Black','Symbol-X-Small-Blue','Symbol-X-Small-Green','Symbol-X-Small-Magenta','Symbol-X-Small-Orange','Symbol-X-Small-Red','Symbol-X-Small-White','Symbol-X-Small-Yellow'];
 const isPoi = cat => /^(svc|sec)_/.test(cat);
 const TYPE_TO_CAT = {};
 CATEGORIES.forEach(c => c.types.forEach(t => TYPE_TO_CAT[t] = c.id));
@@ -371,7 +386,7 @@ const SVC_LABEL = {
   svc_marina: 'Marina', svc_club: 'Club náutico', svc_storage: 'Guardería náutica', svc_fuel: 'Combustible náutico',
   svc_slip: 'Rampa / varadero', svc_yard: 'Astillero / taller / náutica', svc_ferry: 'Terminal de ferry',
   sec_pna: 'Prefectura / guardacostas / salvamento', sec_lifeguard: 'Guardavidas', sec_hospital: 'Hospital',
-  sec_bridge: 'Puente'
+  sec_bridge: 'Puente', mine: 'Marca propia'
 };
 const WATER_SPORTS = /sailing|rowing|canoe|kayak|motorboat|water_ski|yachting|boat/;
 function serviceCat(t) {
@@ -587,10 +602,12 @@ function buildGPX(marks, title, showNames, withTracks = true) {
     w.setAttribute('lon', m.lon.toFixed(7));
     add(w, 'name', m.name, 2);
     add(w, 'desc', m.desc, 2);
-    add(w, 'src', 'OpenStreetMap', 2);
-    const link = add(w, 'link', null, 2);
-    link.setAttribute('href', `https://www.openstreetmap.org/${m.osmType}/${m.osmId}`);
-    const lt = doc.createElementNS(NS, 'text'); lt.textContent = 'Ver en OSM'; link.appendChild(lt);
+    add(w, 'src', m.osmType ? 'OpenStreetMap' : 'Propia', 2);
+    if (m.osmType) {
+      const link = add(w, 'link', null, 2);
+      link.setAttribute('href', `https://www.openstreetmap.org/${m.osmType}/${m.osmId}`);
+      const lt = doc.createElementNS(NS, 'text'); lt.textContent = 'Ver en OSM'; link.appendChild(lt);
+    }
     if (m.web) {
       const wl = add(w, 'link', null, 2);
       wl.setAttribute('href', m.web);
@@ -644,20 +661,11 @@ const ENDPOINTS = [
   'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter'
 ];
-function overpassQuery(bbox, timeout = 90) {
-  const [s, w, n, e] = bbox;
-  const RESTR = 'restricted_area|military_area|cable_area|pipeline_area|cable_submarine|pipeline_submarine|dumping_ground|marine_farm|precautionary_area|seaplane_landing_area';
-  return `[out:json][timeout:${timeout}][bbox:${s},${w},${n},${e}];` +
-    'way["waterway"~"^(river|canal)$"]->.ww;(' +
-    // seguridad
-    'nwr["amenity"="police"]["name"~"[Pp]refectura|[Gg]uardacostas"];' +
-    'nwr["amenity"="police"]["operator"~"[Pp]refectura"];' +
-    'nwr["emergency"~"^(water_rescue|coast_guard|lifeguard|lifeguard_tower|lifeguard_base|lifeguard_platform)$"];' +
-    'nwr["amenity"="hospital"];nwr["healthcare"="hospital"];' +
-    // puentes sobre ríos y canales navegables
-    'nwr["man_made"="bridge"];way["waterway"]["maxheight"];' +
-    'way(around.ww:0)["bridge"]["bridge"!="no"]["highway"!~"^(footway|path|cycleway|steps|bridleway|pedestrian)$"];' +
-    'nwr["seamark:type"];' +
+/* Consultas por grupo: livianas (solo claves indexadas, sin búsquedas espaciales caras) */
+const RESTR = 'restricted_area|military_area|cable_area|pipeline_area|cable_submarine|pipeline_submarine|dumping_ground|marine_farm|precautionary_area|seaplane_landing_area';
+const QUERY_PARTS = {
+  marks: 'nwr["seamark:type"];',
+  svc:
     'nwr["leisure"~"^(marina|slipway)$"];' +
     'nwr["waterway"~"^(fuel|boatyard|slipway)$"];' +
     'nwr["amenity"="fuel"]["boat"="yes"];' +
@@ -667,14 +675,37 @@ function overpassQuery(bbox, timeout = 90) {
     'nwr["club"]["sport"~"sailing|rowing|canoe|kayak|motorboat|water_ski"];' +
     'nwr["leisure"="sports_centre"]["sport"~"sailing|rowing|canoe|kayak|motorboat|water_ski"];' +
     'nwr["club"]["name"~"[Yy]acht|[Nn][aá]utico"];' +
-    `);out center tags qt;` +
-    `nwr["seamark:type"~"^(${RESTR})$"];out geom qt;`;
+    'nwr["seamark:type"~"^(harbour|small_craft_facility)$"];',
+  sec:
+    'nwr["amenity"="police"]["name"~"[Pp]refectura|[Gg]uardacostas"];' +
+    'nwr["amenity"="police"]["operator"~"[Pp]refectura"];' +
+    'nwr["emergency"~"^(water_rescue|coast_guard|lifeguard|lifeguard_tower|lifeguard_base|lifeguard_platform)$"];' +
+    'nwr["seamark:type"~"^(coastguard_station|rescue_station|bridge)$"];' +
+    'nwr["amenity"="hospital"];nwr["healthcare"="hospital"];' +
+    // puentes: los cargados como puente náutico, los de rutas principales y ferroviarios, y los móviles
+    'nwr["man_made"="bridge"];way["waterway"]["maxheight"];' +
+    'way["bridge"]["bridge"!="no"]["highway"~"^(motorway|trunk|primary|secondary|tertiary)$"];' +
+    'way["bridge"]["bridge"!="no"]["railway"~"^(rail|light_rail|narrow_gauge)$"];' +
+    'way["bridge"="movable"];'
+};
+const GROUP_NAMES = { marks: 'marcas náuticas', svc: 'servicios', sec: 'seguridad' };
+function activeGroups() {
+  const g = new Set();
+  for (const c of CATEGORIES) if (checked[c.id] && c.group !== 'mine') g.add(c.group || 'marks');
+  return ['marks', 'svc', 'sec'].filter(x => g.has(x));
+}
+function overpassQuery(bbox, groups = ['marks', 'svc', 'sec'], timeout = 60) {
+  const [s, w, n, e] = bbox;
+  let q = `[out:json][timeout:${timeout}][bbox:${s},${w},${n},${e}];(` +
+    groups.map(g => QUERY_PARTS[g]).join('') + ');out center tags qt;';
+  if (groups.includes('sec')) q += `nwr["seamark:type"~"^(${RESTR})$"];out geom qt;`;
+  return q;
 }
 let goodEndpoint = null;   // el último servidor que respondió bien se prueba primero
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-async function overpassOne(bbox, onTry) {
-  const q = overpassQuery(bbox);
+async function overpassOne(bbox, groups, onTry) {
+  const q = overpassQuery(bbox, groups);
   const order = goodEndpoint ? [goodEndpoint, ...ENDPOINTS.filter(u => u !== goodEndpoint)] : ENDPOINTS;
   const errors = [];
   for (let round = 0; round < 2; round++) {
@@ -683,7 +714,7 @@ async function overpassOne(bbox, onTry) {
       for (const method of ['GET', 'POST']) {
         onTry && onTry(url, method);
         const ctl = new AbortController();
-        const t = setTimeout(() => ctl.abort(), 120000);
+        const t = setTimeout(() => ctl.abort(), 75000);
         try {
           const r = method === 'GET'
             ? await fetch(url + '?data=' + encodeURIComponent(q), { signal: ctl.signal })
@@ -712,7 +743,7 @@ async function overpassOne(bbox, onTry) {
 }
 
 /* Zonas grandes se dividen en tramos de ≤ 0,5° × 0,5° para no saturar los servidores */
-function splitBBox([s, w, n, e], step = 0.5) {
+function splitBBox([s, w, n, e], step = 1) {
   const tiles = [];
   for (let la = s; la < n - 1e-9; la += step)
     for (let lo = w; lo < e - 1e-9; lo += step)
@@ -721,14 +752,27 @@ function splitBBox([s, w, n, e], step = 0.5) {
 }
 async function overpass(bbox, onTry) {
   const tiles = splitBBox(bbox);
-  const all = [];
+  const groups = activeGroups();
+  const all = [], failed = [];
+  const steps = tiles.length * groups.length;
+  let k = 0;
   for (let i = 0; i < tiles.length; i++) {
-    const els = await overpassOne(tiles[i], (url, method) =>
-      onTry && onTry(url, method, tiles.length > 1 ? `tramo ${i + 1}/${tiles.length}` : ''));
-    all.push(...els);
-    if (i < tiles.length - 1) await sleep(1500);
+    for (const g of groups) {
+      k++;
+      const part = `${GROUP_NAMES[g]}` + (steps > 1 ? ` · paso ${k}/${steps}` : '');
+      try {
+        const els = await overpassOne(tiles[i], [g], (url, method) => onTry && onTry(url, method, part));
+        all.push(...els);
+      } catch (err) {
+        // Un grupo que falla no arruina los demás
+        failed.push(`${GROUP_NAMES[g]}${tiles.length > 1 ? ' (tramo ' + (i + 1) + ')' : ''}`);
+        console.info('Overpass: grupo fallido', g, err.message);
+      }
+      if (k < steps) await sleep(1000);
+    }
   }
-  return all;
+  if (!all.length && failed.length) throw new Error('ningún servidor respondió para: ' + failed.join(', '));
+  return { els: all, failed };
 }
 
 /* Convierte un archivo exportado de Overpass Turbo (JSON crudo o GeoJSON) a elementos Overpass */
@@ -804,6 +848,82 @@ function download(list, suffix) {
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
 
+/* ---------- ediciones del usuario (se guardan en este navegador) ---------- */
+let edits = store.get('edits', {});     // id -> { name, desc, sym, deleted }
+let custom = store.get('custom', []);   // marcas propias
+const saveEdits = () => { store.set('edits', edits); store.set('custom', custom); };
+function applyEdits(list) {
+  const out = [];
+  for (const m of list) {
+    const ed = edits[m.id];
+    if (ed && ed.deleted) continue;
+    if (ed) {
+      m.orig = m.orig || { name: m.name, desc: m.desc, sym: m.sym };
+      if (ed.name != null) m.name = ed.name;
+      if (ed.desc != null) m.desc = ed.desc;
+      if (ed.sym) m.sym = ed.sym;
+      m.edited = true;
+    }
+    out.push(m);
+  }
+  return out.concat(custom.map(c => ({ ...c })));
+}
+function refreshAll() {
+  const osm = marks.filter(m => m.cat !== 'mine');
+  marks = applyEdits(osm.map(m => (m.orig ? Object.assign(m, m.orig, { edited: false }) : m)));
+  renderCats(); renderMap(); updateDeleted();
+}
+function updateDeleted() {
+  const n = Object.values(edits).filter(e => e.deleted).length;
+  const b = $('restoreDel');
+  b.hidden = !n;
+  b.textContent = `Restaurar marcas borradas (${n})`;
+}
+function editForm(m, box) {
+  const name = el('input', { type: 'text', value: m.name, style: 'width:100%' });
+  const desc = el('textarea', { rows: 6, style: 'width:100%' }); desc.value = m.desc;
+  const sym = el('select', { style: 'width:100%' });
+  const icons = ICONS.includes(m.sym) ? ICONS : [m.sym, ...ICONS];
+  icons.forEach(i => sym.append(el('option', { value: i, selected: i === m.sym }, i)));
+  const lat = el('input', { type: 'number', step: '0.00001', value: m.lat.toFixed(6) });
+  const lon = el('input', { type: 'number', step: '0.00001', value: m.lon.toFixed(6) });
+  const save = () => {
+    if (m.cat === 'mine') {
+      const c = custom.find(c => c.id === m.id);
+      Object.assign(c, { name: name.value, desc: desc.value, sym: sym.value,
+        lat: parseFloat(lat.value) || c.lat, lon: parseFloat(lon.value) || c.lon });
+    } else {
+      edits[m.id] = { name: name.value, desc: desc.value, sym: sym.value };
+    }
+    saveEdits(); refreshAll();
+  };
+  const del = () => {
+    if (m.cat === 'mine') custom = custom.filter(c => c.id !== m.id);
+    else edits[m.id] = { deleted: true };
+    saveEdits(); refreshAll();
+  };
+  const restore = () => { delete edits[m.id]; saveEdits(); refreshAll(); };
+  box.replaceChildren(
+    el('label', null, 'Nombre', name),
+    el('label', null, 'Descripción', desc),
+    el('label', null, 'Ícono OpenCPN', sym),
+    m.cat === 'mine' ? el('div', { class: 'grid4' }, el('label', null, 'Lat', lat), el('label', null, 'Lon', lon)) : null,
+    el('div', { class: 'row' },
+      el('button', { type: 'button', class: 'primary', onclick: save }, 'Guardar'),
+      el('button', { type: 'button', onclick: del }, 'Borrar'),
+      m.edited ? el('button', { type: 'button', onclick: restore }, 'Restaurar original') : null)
+  );
+}
+let addMode = false;
+function addCustomAt(latlng) {
+  addMode = false; $('map').style.cursor = ''; $('addMark').classList.remove('primary');
+  const c = { id: 'mine/' + Date.now(), osmType: null, osmId: null, lat: latlng.lat, lon: latlng.lng,
+    type: 'mine', cat: 'mine', tags: {}, colour: '', name: 'Marca propia', desc: '', sym: 'Symbol-Pin-Red', web: '' };
+  custom.push(c); saveEdits(); refreshAll();
+  const m = marks.find(x => x.id === c.id);
+  if (m && m._layer) { m._editNow = true; m._layer.openPopup(); }
+}
+
 function renderCats() {
   const box = $('cats');
   box.replaceChildren();
@@ -837,12 +957,17 @@ function updateButtons() {
   $('dlAll').textContent = n ? `Descargar GPX (${n} marcas)` : 'Descargar GPX (seleccionadas)';
 }
 function popupFor(m) {
-  return el('div', { class: 'pop' },
-    el('h3', null, m.name),
-    el('p', null, m.desc),
-    el('a', { href: `https://www.openstreetmap.org/${m.osmType}/${m.osmId}`, target: '_blank', rel: 'noopener' }, 'Ver en OSM'),
+  const box = el('div', { class: 'pop' });
+  const view = () => box.replaceChildren(
+    el('h3', null, m.name, m.edited ? el('small', { class: 'note' }, ' (editada)') : null),
+    el('p', null, m.desc || '—'),
+    el('p', { class: 'note' }, 'Ícono: ' + m.sym),
+    m.osmType ? el('a', { href: `https://www.openstreetmap.org/${m.osmType}/${m.osmId}`, target: '_blank', rel: 'noopener' }, 'Ver en OSM') : null,
     m.web ? ' · ' : null,
-    m.web ? el('a', { href: m.web, target: '_blank', rel: 'noopener' }, 'Sitio web') : null);
+    m.web ? el('a', { href: m.web, target: '_blank', rel: 'noopener' }, 'Sitio web') : null,
+    el('div', { class: 'row' }, el('button', { type: 'button', onclick: () => editForm(m, box) }, '✎ Editar')));
+  if (m._editNow) { m._editNow = false; editForm(m, box); } else view();
+  return box;
 }
 function renderMap() {
   if (!map) return;
@@ -855,11 +980,11 @@ function renderMap() {
     for (const line of m.lines || []) {
       L.polyline(line, { color: catColor, weight: 2, dashArray: '6 4', interactive: false }).addTo(layerGroup);
     }
-    L.circleMarker([m.lat, m.lon], {
-      radius: isPoi(m.cat) ? 7 : m.cat === 'lights' ? 6 : 5,
-      weight: isPoi(m.cat) ? 2 : 1, color: isPoi(m.cat) ? '#fff' : '#000',
+    m._layer = L.circleMarker([m.lat, m.lon], {
+      radius: isPoi(m.cat) || m.cat === 'mine' ? 7 : m.cat === 'lights' ? 6 : 5,
+      weight: isPoi(m.cat) || m.edited ? 2 : 1, color: m.edited ? '#00a676' : isPoi(m.cat) ? '#fff' : '#000',
       fillColor: m.noData ? '#bbbbbb' : fill, fillOpacity: .9
-    }).bindPopup(() => popupFor(m)).addTo(layerGroup);
+    }).bindPopup(() => popupFor(m), { maxWidth: 320, minWidth: 260 }).addTo(layerGroup);
   }
 }
 
@@ -875,16 +1000,17 @@ function loadElements(els, label) {
     if (e.lat != null) { prev.lat = e.lat; prev.lon = e.lon; }
     prev.tags = { ...(prev.tags || {}), ...(e.tags || {}) };
   }
-  marks = [];
+  const parsed = [];
   for (const e of byId.values()) {
     const m = parseElement(e);
-    if (m) marks.push(m);
+    if (m) parsed.push(m);
   }
+  marks = applyEdits(parsed);
   setStatus(marks.length
     ? `${marks.length} marcas ${label}.`
     : 'No se encontraron marcas náuticas (puede que nadie las haya cargado en OSM en esta zona).',
     marks.length ? '' : 'warn');
-  renderCats(); renderMap();
+  renderCats(); renderMap(); updateDeleted();
   if (map && marks.length) map.fitBounds(L.latLngBounds(marks.map(m => [m.lat, m.lon])), { padding: [20, 20] });
 }
 
@@ -894,10 +1020,13 @@ async function doFetch() {
   $('fetch').disabled = true;
   const t0 = performance.now();
   try {
-    const els = await overpass(b, (url, method, part) => setStatus(
+    if (!activeGroups().length) { setStatus('Tildá al menos una categoría.', 'warn'); return; }
+    const { els, failed } = await overpass(b, (url, method, part) => setStatus(
       (url ? `Consultando ${new URL(url).host} (${method})` : method) + (part ? ` · ${part}` : '') +
-      '…\n(zonas grandes se bajan por tramos; puede tardar unos minutos)'));
+      '…\n(se baja por grupos y tramos; puede tardar unos minutos)'));
     loadElements(els, `encontradas en ${((performance.now() - t0) / 1000).toFixed(1)} s`);
+    if (failed.length) setStatus($('status').textContent +
+      `\n\nNo se pudo bajar: ${failed.join(', ')}. Los servidores están saturados; probá de nuevo en un rato.`, 'warn');
   } catch (err) {
     const local = location.protocol === 'file:';
     setStatus(`Error al consultar Overpass: ${err.message}\n\n` + (local
@@ -946,6 +1075,19 @@ function init() {
   $('loadBtn').addEventListener('click', () => $('fileIn').click());
   $('fileIn').addEventListener('change', ev => { loadFile(ev.target.files[0]); ev.target.value = ''; });
   $('dlAll').addEventListener('click', () => download(selectedMarks(), 'todas'));
+  $('restoreDel').addEventListener('click', () => {
+    for (const k of Object.keys(edits)) if (edits[k].deleted) delete edits[k];
+    saveEdits();
+    setStatus('Marcas restauradas. Volvé a buscar para recuperarlas.');
+    updateDeleted();
+  });
+  $('addMark').addEventListener('click', () => {
+    if (!map) return;
+    addMode = !addMode;
+    $('addMark').classList.toggle('primary', addMode);
+    $('map').style.cursor = addMode ? 'crosshair' : '';
+    if (addMode) setStatus('Tocá el mapa donde querés agregar la marca.');
+  });
 
   if (window.L) {
     map = L.map('map', { preferCanvas: true });
@@ -964,6 +1106,7 @@ function init() {
       maxZoom: 18, attribution: '© OpenSeaMap'
     });
     layerGroup = L.layerGroup().addTo(map);
+    map.on('click', ev => { if (addMode) addCustomAt(ev.latlng); });
     L.control.layers(base, { 'Capa OpenSeaMap': seamarks, 'Marcas descargadas': layerGroup }).addTo(map);
     $('useView').addEventListener('click', () => {
       const bb = map.getBounds();
@@ -983,7 +1126,8 @@ function init() {
   setBBox(b);
   setStatus('Elegí una zona y tocá «Buscar».');
   if (map) map.fitBounds([[b[0], b[1]], [b[2], b[3]]]);
-  renderCats();
+  marks = applyEdits([]);
+  renderCats(); renderMap(); updateDeleted();
 }
 init();
 </script>
