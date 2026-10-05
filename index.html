@@ -52,6 +52,9 @@ button:disabled{opacity:.5;cursor:default}
 .status.err{color:var(--err)}
 .note{font-size:12px;color:var(--muted)}
 .check{display:flex;gap:8px;align-items:center;margin-top:6px}
+label.radio{display:inline-flex;gap:6px;align-items:center;margin-right:12px}
+.vtx{width:12px;height:12px;border-radius:50%;background:#fff;border:2px solid #d81b60;box-sizing:border-box;cursor:move}
+.vtx.first{background:#d81b60}
 details{margin-top:14px}
 summary{cursor:pointer;font-weight:600}
 ol{padding-left:18px;margin:6px 0}
@@ -85,6 +88,19 @@ ol{padding-left:18px;margin:6px 0}
   </div>
   <div class="row">
     <button id="useView">Usar vista del mapa</button>
+  </div>
+  <div class="row modes">
+    <label class="radio"><input type="radio" name="zmode" value="rect"> Rectángulo</label>
+    <label class="radio"><input type="radio" name="zmode" value="poly"> Polígono dibujado</label>
+  </div>
+  <div id="polyTools" hidden>
+    <div class="row">
+      <button id="drawPoly">✏️ Dibujar</button>
+      <button id="undoPt" disabled>↶ Deshacer punto</button>
+      <button id="finishPoly" class="primary" disabled>✔ Terminar</button>
+      <button id="clearPoly">Borrar</button>
+    </div>
+    <p class="note" id="polyInfo"></p>
   </div>
 
   <h2>2 · Descargar de OSM</h2>
@@ -140,7 +156,7 @@ ol{padding-left:18px;margin:6px 0}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
 'use strict';
-const VERSION = '1.6.2';
+const VERSION = '1.7.0';
 
 /* ---------- utilidades DOM ---------- */
 const $ = id => document.getElementById(id);
@@ -694,24 +710,35 @@ function activeGroups() {
   for (const c of CATEGORIES) if (checked[c.id] && c.group !== 'mine') g.add(c.group || 'marks');
   return ['marks', 'svc', 'sec'].filter(x => g.has(x));
 }
-function overpassQuery(bbox, groups = ['marks', 'svc', 'sec'], timeout = 45) {
+function overpassQuery(bbox, groups = ['marks', 'svc', 'sec'], timeout = 45, polygon = null) {
   const [s, w, n, e] = bbox;
+  // Con polígono, cada sentencia lleva el filtro (poly:"lat lon lat lon …") además del bbox del tramo
+  const pf = polygon ? `(poly:"${polygon.map(p => p[0].toFixed(5) + ' ' + p[1].toFixed(5)).join(' ')}")` : '';
+  const f = str => pf ? str.replace(/;/g, pf + ';') : str;
   let q = `[out:json][timeout:${timeout}][maxsize:67108864][bbox:${s},${w},${n},${e}];(` +
-    groups.map(g => QUERY_PARTS[g]).join('') + ');out center tags qt;';
-  if (groups.includes('sec')) q += `(${RESTR_GEOM});out geom qt;`;
+    f(groups.map(g => QUERY_PARTS[g]).join('')) + ');out center tags qt;';
+  if (groups.includes('sec')) q += `(${f(RESTR_GEOM)});out geom qt;`;
   return q;
+}
+function pointInPoly(lat, lon, poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [yi, xi] = poly[i], [yj, xj] = poly[j];
+    if (((yi > lat) !== (yj > lat)) && (lon < (xj - xi) * (lat - yi) / (yj - yi) + xi)) inside = !inside;
+  }
+  return inside;
 }
 let goodEndpoint = null;   // el último servidor que respondió bien se prueba primero
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-async function overpassOne(bbox, groups, onTry) {
-  const q = overpassQuery(bbox, groups);
+async function overpassOne(bbox, groups, onTry, polygon) {
+  const q = overpassQuery(bbox, groups, 45, polygon);
   const order = goodEndpoint ? [goodEndpoint, ...ENDPOINTS.filter(u => u !== goodEndpoint)] : ENDPOINTS;
   const errors = [];
   for (let round = 0; round < 2; round++) {
     if (round) { onTry && onTry(null, 'reintento en 10 s…'); await sleep(10000); }
     for (const url of order) {
-      for (const method of ['GET', 'POST']) {
+      for (const method of (q.length > 3500 ? ['POST'] : ['GET', 'POST'])) {
         onTry && onTry(url, method);
         const ctl = new AbortController();
         const t = setTimeout(() => ctl.abort(), 75000);
@@ -750,7 +777,7 @@ function splitBBox([s, w, n, e], step = 1) {
       tiles.push([la, lo, Math.min(la + step, n), Math.min(lo + step, e)].map(v => +v.toFixed(5)));
   return tiles;
 }
-async function overpass(bbox, onTry) {
+async function overpass(bbox, onTry, polygon = null) {
   const tiles = splitBBox(bbox);
   const groups = activeGroups();
   const all = [], failed = [];
@@ -761,7 +788,7 @@ async function overpass(bbox, onTry) {
       k++;
       const part = `${GROUP_NAMES[g]}` + (steps > 1 ? ` · paso ${k}/${steps}` : '');
       try {
-        const els = await overpassOne(tiles[i], [g], (url, method) => onTry && onTry(url, method, part));
+        const els = await overpassOne(tiles[i], [g], (url, method) => onTry && onTry(url, method, part), polygon);
         all.push(...els);
       } catch (err) {
         // Un grupo que falla no arruina los demás
@@ -835,6 +862,7 @@ function selectedMarks(catId) {
   return marks.filter(m => catId ? m.cat === catId : checked[m.cat]);
 }
 function zoneLabel() {
+  if (zoneMode === 'poly') return 'poligono';
   const p = PRESETS.find(p => p.id === $('preset').value);
   return p && p.b ? p.id : 'zona';
 }
@@ -1005,7 +1033,10 @@ function loadElements(els, label) {
     const m = parseElement(e);
     if (m) parsed.push(m);
   }
-  marks = applyEdits(parsed);
+  const inside = lastPolygon
+    ? parsed.filter(m => (m.lines && m.lines.length) || pointInPoly(m.lat, m.lon, lastPolygon))
+    : parsed;
+  marks = applyEdits(inside);
   setStatus(marks.length
     ? `${marks.length} marcas ${label}.`
     : 'No se encontraron marcas náuticas (puede que nadie las haya cargado en OSM en esta zona).',
@@ -1014,16 +1045,29 @@ function loadElements(els, label) {
   if (map && marks.length) map.fitBounds(L.latLngBounds(marks.map(m => [m.lat, m.lon])), { padding: [20, 20] });
 }
 
-async function doFetch() {
+function queryArea() {
+  if (zoneMode === 'poly') {
+    if (drawing) { setStatus('Terminá el polígono con ✔ Terminar antes de buscar.', 'warn'); return null; }
+    if (poly.length < 3) { setStatus('Dibujá un polígono de al menos 3 puntos (✏️ Dibujar).', 'warn'); return null; }
+    return { bbox: polyBBox(), polygon: poly.slice() };
+  }
   const b = getBBox();
-  if (!b) { setStatus('Completá las cuatro coordenadas de la zona.', 'err'); return; }
+  if (!b) { setStatus('Completá las cuatro coordenadas de la zona.', 'err'); return null; }
+  return { bbox: b, polygon: null };
+}
+let lastPolygon = null;
+async function doFetch() {
+  const area = queryArea();
+  if (!area) return;
+  const b = area.bbox;
+  lastPolygon = area.polygon;
   $('fetch').disabled = true;
   const t0 = performance.now();
   try {
     if (!activeGroups().length) { setStatus('Tildá al menos una categoría.', 'warn'); return; }
     const { els, failed } = await overpass(b, (url, method, part) => setStatus(
       (url ? `Consultando ${new URL(url).host} (${method})` : method) + (part ? ` · ${part}` : '') +
-      '…\n(se baja por grupos y tramos; puede tardar unos minutos)'));
+      '…\n(se baja por grupos y tramos; puede tardar unos minutos)'), area.polygon);
     loadElements(els, `encontradas en ${((performance.now() - t0) / 1000).toFixed(1)} s`);
     if (failed.length) setStatus($('status').textContent +
       `\n\nNo se pudo bajar: ${failed.join(', ')}. Los servidores están saturados; probá de nuevo en un rato.`, 'warn');
@@ -1038,9 +1082,10 @@ async function doFetch() {
 }
 
 function openTurbo() {
-  const b = getBBox();
-  if (!b) { setStatus('Completá las cuatro coordenadas de la zona.', 'err'); return; }
-  window.open('https://overpass-turbo.eu/?R&Q=' + encodeURIComponent(overpassQuery(b)), '_blank', 'noopener');
+  const area = queryArea();
+  if (!area) return;
+  lastPolygon = area.polygon;
+  window.open('https://overpass-turbo.eu/?R&Q=' + encodeURIComponent(overpassQuery(area.bbox, undefined, 45, area.polygon)), '_blank', 'noopener');
 }
 
 async function loadFile(file) {
@@ -1053,6 +1098,93 @@ async function loadFile(file) {
   }
 }
 
+/* ---------- zona como polígono dibujado ---------- */
+let zoneMode = store.get('zoneMode', 'rect');
+let poly = store.get('poly', []);      // [[lat, lon], …]
+let drawing = false;
+let polyLayer = null, vtxLayers = [];
+function polyBBox() {
+  const la = poly.map(p => p[0]), lo = poly.map(p => p[1]);
+  return [Math.min(...la), Math.min(...lo), Math.max(...la), Math.max(...lo)].map(v => +v.toFixed(5));
+}
+function polyAreaKm2() {
+  // fórmula del área esférica aproximada (shoelace en metros)
+  const R = 6371, lat0 = poly.reduce((a, p) => a + p[0], 0) / poly.length * Math.PI / 180;
+  const xy = poly.map(([la, lo]) => [lo * Math.PI / 180 * R * Math.cos(lat0), la * Math.PI / 180 * R]);
+  let a = 0;
+  for (let i = 0; i < xy.length; i++) { const [x1, y1] = xy[i], [x2, y2] = xy[(i + 1) % xy.length]; a += x1 * y2 - x2 * y1; }
+  return Math.abs(a / 2);
+}
+function savePoly() { store.set('poly', poly); }
+function updatePolyUI() {
+  $('polyTools').hidden = zoneMode !== 'poly';
+  document.querySelectorAll('input[name=zmode]').forEach(r => r.checked = r.value === zoneMode);
+  $('undoPt').disabled = !drawing || !poly.length;
+  $('finishPoly').disabled = !drawing || poly.length < 3;
+  $('drawPoly').classList.toggle('primary', drawing);
+  $('drawPoly').textContent = drawing ? '✏️ Dibujando…' : (poly.length ? '✏️ Redibujar' : '✏️ Dibujar');
+  $('polyInfo').textContent = drawing
+    ? `Tocá el mapa para marcar cada vértice (${poly.length} puntos). Terminá con ✔ Terminar, doble clic o tocando el primer punto.`
+    : poly.length >= 3
+      ? `Polígono de ${poly.length} vértices · ${polyAreaKm2().toFixed(0)} km². Podés arrastrar los vértices para ajustarlo.`
+      : 'Tocá ✏️ Dibujar y marcá los vértices sobre el mapa.';
+  if (rect) rect.setStyle({ opacity: zoneMode === 'poly' ? 0 : 1 });
+}
+function renderPoly() {
+  if (!map) return;
+  if (polyLayer) { polyLayer.remove(); polyLayer = null; }
+  vtxLayers.forEach(v => v.remove()); vtxLayers = [];
+  if (zoneMode === 'poly' && poly.length) {
+    const style = { color: '#d81b60', weight: 2, dashArray: drawing ? '4 4' : null, fillOpacity: 0.06, interactive: false };
+    polyLayer = (drawing || poly.length < 3 ? L.polyline(poly, style) : L.polygon(poly, style)).addTo(map);
+    poly.forEach((pt, i) => {
+      const mk = L.marker(pt, {
+        draggable: !drawing, keyboard: false,
+        icon: L.divIcon({ className: '', html: '', iconSize: [12, 12] })
+      });
+      mk.on('add', () => { const d = mk.getElement(); if (d) d.className = 'vtx' + (i === 0 ? ' first' : ''); });
+      mk.on('drag', ev => { poly[i] = [ev.latlng.lat, ev.latlng.lng]; polyLayer.setLatLngs(poly); });
+      mk.on('dragend', () => { savePoly(); setBBox(polyBBox()); updatePolyUI(); });
+      mk.on('click', ev => {
+        if (drawing && i === 0 && poly.length >= 3) { L.DomEvent.stopPropagation(ev); finishPoly(); }
+      });
+      mk.addTo(map);
+      vtxLayers.push(mk);
+    });
+  }
+  updatePolyUI();
+}
+function startPoly() {
+  if (!map) return;
+  addMode = false;
+  drawing = true; poly = [];
+  map.doubleClickZoom.disable();
+  $('map').style.cursor = 'crosshair';
+  renderPoly();
+}
+function finishPoly() {
+  // el doble clic agrega dos clics: quitar puntos repetidos al final
+  while (poly.length > 1) {
+    const a = poly[poly.length - 1], b = poly[poly.length - 2];
+    if (Math.abs(a[0] - b[0]) < 1e-7 && Math.abs(a[1] - b[1]) < 1e-7) poly.pop(); else break;
+  }
+  if (poly.length < 3) { setStatus('El polígono necesita al menos 3 puntos.', 'warn'); return; }
+  drawing = false;
+  map.doubleClickZoom.enable();
+  $('map').style.cursor = '';
+  savePoly();
+  $('preset').value = 'custom'; store.set('preset', 'custom');
+  setBBox(polyBBox());
+  renderPoly();
+  setStatus('Polígono listo. Tocá «Buscar en OSM».');
+}
+function setZoneMode(m) {
+  zoneMode = m; store.set('zoneMode', m);
+  if (m === 'poly' && poly.length >= 3 && !drawing) setBBox(polyBBox());
+  if (m === 'rect' && drawing) { drawing = false; map && map.doubleClickZoom.enable(); $('map').style.cursor = ''; }
+  renderPoly();
+}
+
 function init() {
   $('ver').textContent = 'v' + VERSION;
   const sel = $('preset');
@@ -1061,6 +1193,7 @@ function init() {
     const p = PRESETS.find(p => p.id === sel.value);
     store.set('preset', sel.value);
     if (p && p.b) {
+      setZoneMode('rect');
       setBBox(p.b);
       if (map) map.fitBounds([[p.b[0], p.b[1]], [p.b[2], p.b[3]]]);
     }
@@ -1082,7 +1215,7 @@ function init() {
     updateDeleted();
   });
   $('addMark').addEventListener('click', () => {
-    if (!map) return;
+    if (!map || drawing) return;
     addMode = !addMode;
     $('addMark').classList.toggle('primary', addMode);
     $('map').style.cursor = addMode ? 'crosshair' : '';
@@ -1106,11 +1239,16 @@ function init() {
       maxZoom: 18, attribution: '© OpenSeaMap'
     });
     layerGroup = L.layerGroup().addTo(map);
-    map.on('click', ev => { if (addMode) addCustomAt(ev.latlng); });
+    map.on('click', ev => {
+      if (drawing) { poly.push([ev.latlng.lat, ev.latlng.lng]); renderPoly(); return; }
+      if (addMode) addCustomAt(ev.latlng);
+    });
+    map.on('dblclick', () => { if (drawing) finishPoly(); });
     L.control.layers(base, { 'Capa OpenSeaMap': seamarks, 'Marcas descargadas': layerGroup }).addTo(map);
     $('useView').addEventListener('click', () => {
       const bb = map.getBounds();
       sel.value = 'custom'; store.set('preset', 'custom');
+      setZoneMode('rect');
       setBBox([bb.getSouth(), bb.getWest(), bb.getNorth(), bb.getEast()]);
     });
   } else {
@@ -1128,6 +1266,20 @@ function init() {
   if (map) map.fitBounds([[b[0], b[1]], [b[2], b[3]]]);
   marks = applyEdits([]);
   renderCats(); renderMap(); updateDeleted();
+  document.querySelectorAll('input[name=zmode]').forEach(r => r.addEventListener('change', () => setZoneMode(r.value)));
+  $('drawPoly').addEventListener('click', startPoly);
+  $('finishPoly').addEventListener('click', finishPoly);
+  $('undoPt').addEventListener('click', () => { poly.pop(); renderPoly(); });
+  $('clearPoly').addEventListener('click', () => {
+    drawing = false; poly = []; savePoly();
+    if (map) { map.doubleClickZoom.enable(); $('map').style.cursor = ''; }
+    renderPoly();
+  });
+  if (zoneMode === 'poly' && poly.length >= 3) {
+    setBBox(polyBBox());
+    if (map) map.fitBounds(L.latLngBounds(poly), { padding: [20, 20] });
+  }
+  renderPoly(); updatePolyUI();
 }
 init();
 </script>
