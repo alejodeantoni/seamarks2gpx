@@ -41,6 +41,9 @@ button:disabled{opacity:.5;cursor:default}
 .cat{display:grid;grid-template-columns:auto 12px 1fr auto auto;align-items:center;gap:8px;
   padding:6px 8px;border-top:1px solid var(--line)}
 .cat:first-child{border-top:0}
+.cat-head{padding:6px 8px;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;
+  color:var(--muted);background:var(--bg);border-top:1px solid var(--line)}
+.cat-head:first-child{border-top:0}
 .dot{width:12px;height:12px;border-radius:50%;border:1px solid rgba(0,0,0,.35)}
 .count{color:var(--muted);font-variant-numeric:tabular-nums;min-width:3ch;text-align:right}
 .cat button{padding:2px 8px;font-size:12px}
@@ -81,9 +84,9 @@ ol{padding-left:18px;margin:6px 0}
     <button id="useView">Usar vista del mapa</button>
   </div>
 
-  <h2>2 · Descargar de OSM</h2>
+  <h2>2 · Descargar de OSM (marcas + servicios)</h2>
   <div class="row">
-    <button class="primary" id="fetch">Buscar marcas náuticas</button>
+    <button class="primary" id="fetch">Buscar marcas y servicios</button>
   </div>
   <div class="status" id="status">Elegí una zona y tocá «Buscar».</div>
   <details id="planb">
@@ -124,7 +127,7 @@ ol{padding-left:18px;margin:6px 0}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
 'use strict';
-const VERSION = '1.3.1';
+const VERSION = '1.4.0';
 
 /* ---------- utilidades DOM ---------- */
 const $ = id => document.getElementById(id);
@@ -170,7 +173,15 @@ const CATEGORIES = [
   { id: 'lights',   label: 'Faros y luces',           color: '#f5a623', def: true,  types: ['light', 'light_major', 'light_minor', 'light_vessel', 'light_float', 'landmark'] },
   { id: 'hazards',  label: 'Peligros (naufragios, rocas, obstrucciones)', color: '#7b3fa0', def: true, types: ['wreck', 'rock', 'obstruction'] },
   { id: 'harbour',  label: 'Fondeaderos, amarras, puertos', color: '#1f77b4', def: true, types: ['anchorage', 'anchor_berth', 'mooring', 'harbour', 'small_craft_facility', 'berth'] },
-  { id: 'other',    label: 'Otros (puentes, cables, avisos…)', color: '#8c8c8c', def: false, types: [] }
+  { id: 'other',    label: 'Otros (puentes, cables, avisos…)', color: '#8c8c8c', def: false, types: [] },
+  // --- Servicios náuticos (etiquetas generales de OSM, no seamark) ---
+  { id: 'svc_marina',  group: 'svc', label: 'Marinas y puertos deportivos', color: '#0b6bcb', def: true, types: [] },
+  { id: 'svc_club',    group: 'svc', label: 'Clubes náuticos',              color: '#17becf', def: true, types: [] },
+  { id: 'svc_storage', group: 'svc', label: 'Guarderías náuticas',          color: '#8c564b', def: true, types: [] },
+  { id: 'svc_fuel',    group: 'svc', label: 'Combustible',                  color: '#e4572e', def: true, types: [] },
+  { id: 'svc_slip',    group: 'svc', label: 'Rampas y varaderos',           color: '#2ca02c', def: true, types: [] },
+  { id: 'svc_yard',    group: 'svc', label: 'Astilleros, talleres y náuticas', color: '#9467bd', def: true, types: [] },
+  { id: 'svc_ferry',   group: 'svc', label: 'Terminales de ferry / lanchas', color: '#bcbd22', def: false, types: [] }
 ];
 const TYPE_TO_CAT = {};
 CATEGORIES.forEach(c => c.types.forEach(t => TYPE_TO_CAT[t] = c.id));
@@ -322,12 +333,80 @@ function formatLights(tags) {
   return out;
 }
 
+/* ---------- servicios náuticos ---------- */
+const SVC_LABEL = {
+  svc_marina: 'Marina', svc_club: 'Club náutico', svc_storage: 'Guardería náutica', svc_fuel: 'Combustible náutico',
+  svc_slip: 'Rampa / varadero', svc_yard: 'Astillero / taller / náutica', svc_ferry: 'Terminal de ferry'
+};
+const WATER_SPORTS = /sailing|rowing|canoe|kayak|motorboat|water_ski|yachting|boat/;
+function serviceCat(t) {
+  if (t.leisure === 'marina' || t['seamark:small_craft_facility:category'] === 'marina' || t['seamark:harbour:category'] === 'marina') return 'svc_marina';
+  if (t.waterway === 'fuel' || (t.amenity === 'fuel' && (t.boat === 'yes' || t.waterway))) return 'svc_fuel';
+  if (t.amenity === 'boat_storage' || /boat_?storage|dry_stack/.test(t['seamark:small_craft_facility:category'] || '')) return 'svc_storage';
+  if (t.leisure === 'slipway' || t.waterway === 'slipway' || /slipway|boat_hoist|ramp/.test(t['seamark:small_craft_facility:category'] || '')) return 'svc_slip';
+  if (t.waterway === 'boatyard' || t.craft === 'boatbuilder' || t.shop === 'boat' || t.shop === 'outboard_motor' ||
+      t.craft === 'sailmaker' || t.shop === 'marine' || t.shop === 'fishing') return t.shop === 'fishing' ? null : 'svc_yard';
+  if ((t.club && WATER_SPORTS.test(t.sport || t.club)) || (t.leisure === 'sports_centre' && WATER_SPORTS.test(t.sport || '')) ||
+      t.club === 'yacht' || /yacht.?club|club n[aá]utico|yacht/i.test(t.name || '')) return 'svc_club';
+  if (t.amenity === 'ferry_terminal') return 'svc_ferry';
+  return null;
+}
+function serviceSym(cat, t) {
+  switch (cat) {
+    case 'svc_marina':  return 'Service-Marina';
+    case 'svc_club':    return 'Service-Yacht-Club';
+    case 'svc_storage': return 'Service-Haulout';
+    case 'svc_fuel':    return t['fuel:diesel'] === 'yes' && t['fuel:octane_95'] !== 'yes' && t['fuel:octane_98'] !== 'yes'
+                          ? 'Service-Fuel-Pump-Diesel' : 'Service-Fuel-Pump-Diesel-Petrol';
+    case 'svc_slip':    return 'Service-Public-Landing';
+    case 'svc_yard':    return t.shop ? 'Service-Chandlery' : 'Service-Repairs';
+    case 'svc_ferry':   return 'Service-Dock';
+  }
+  return 'Info-Info';
+}
+const FUEL_ES = { diesel: 'gasoil', octane_95: 'nafta 95', octane_98: 'nafta 98', octane_91: 'nafta 91',
+  gasoline: 'nafta', lpg: 'GLP', two_stroke: 'mezcla 2T', biodiesel: 'biodiésel', cng: 'GNC' };
+function parseService(e, cat, lat, lon) {
+  const t = e.tags || {};
+  const lines = [SVC_LABEL[cat]];
+  const name = t.name || t['seamark:name'] || t.operator || SVC_LABEL[cat];
+  if (t.operator && t.operator !== name) lines.push(`Operador: ${t.operator}`);
+  const SPORT_ES = { sailing: 'vela', rowing: 'remo', canoe: 'canotaje', kayak: 'kayak', motorboat: 'motonáutica',
+    water_ski: 'esquí acuático', fishing: 'pesca', swimming: 'natación', yachting: 'yachting' };
+  if (t.sport) lines.push(`Deportes: ${t.sport.split(';').map(x => SPORT_ES[x.trim()] || x.trim().replace(/_/g, ' ')).join(', ')}`);
+  const fuels = Object.keys(FUEL_ES).filter(k => t['fuel:' + k] === 'yes').map(k => FUEL_ES[k]);
+  if (fuels.length) lines.push(`Combustibles: ${fuels.join(', ')}`);
+  if (t.capacity) lines.push(`Capacidad: ${t.capacity} embarcaciones`);
+  if (t['seamark:small_craft_facility:category']) lines.push(`Instalaciones: ${t['seamark:small_craft_facility:category'].replace(/_/g, ' ').replace(/;/g, ', ')}`);
+  const addr = [[t['addr:street'], t['addr:housenumber']].filter(Boolean).join(' '), t['addr:city']].filter(Boolean).join(', ');
+  if (addr) lines.push(`Dirección: ${addr}`);
+  const phone = t.phone || t['contact:phone'];
+  if (phone) lines.push(`Tel: ${phone}`);
+  const vhf = t['seamark:radio_station:channel'] || t.vhf || t['communication:vhf'];
+  if (vhf) lines.push(`VHF: canal ${vhf}`);
+  const email = t.email || t['contact:email'];
+  if (email) lines.push(`Email: ${email}`);
+  const web = t.website || t['contact:website'] || t.url;
+  if (web) lines.push(`Web: ${web}`);
+  if (t.opening_hours) lines.push(`Horario: ${t.opening_hours}`);
+  if (t.description || t.note) lines.push(`Info: ${t.description || t.note}`);
+  lines.push(`Fuente: OpenStreetMap ${e.type}/${e.id} (no oficial)`);
+  return {
+    id: `${e.type}/${e.id}`, osmType: e.type, osmId: e.id, lat, lon, type: cat, cat, tags: t, colour: '',
+    name, desc: lines.join('\n'), lit: false, web: web && /^https?:/.test(web) ? web : (web ? 'http://' + web : ''),
+    sym: serviceSym(cat, t)
+  };
+}
+
 /* ---------- parseo de un elemento Overpass ---------- */
 function parseElement(e) {
   const tags = e.tags || {};
   const type = (tags['seamark:type'] || '').split(';')[0].trim();
   const lat = e.lat ?? e.center?.lat, lon = e.lon ?? e.center?.lon;
-  if (!type || lat == null || lon == null) return null;
+  if (lat == null || lon == null) return null;
+  const svc = serviceCat(tags);
+  if (svc && (!type || ['harbour', 'small_craft_facility', 'berth', 'mooring'].includes(type))) return parseService(e, svc, lat, lon);
+  if (!type) return null;
   const g = k => tags[`seamark:${type}:${k}`];
   const cat = TYPE_TO_CAT[type] || 'other';
   const colour = g('colour') || (cat === 'lights' ? tags['seamark:light:colour'] : '') || '';
@@ -403,8 +482,13 @@ function buildGPX(marks, title, showNames) {
     const link = add(w, 'link', null, 2);
     link.setAttribute('href', `https://www.openstreetmap.org/${m.osmType}/${m.osmId}`);
     const lt = doc.createElementNS(NS, 'text'); lt.textContent = 'Ver en OSM'; link.appendChild(lt);
+    if (m.web) {
+      const wl = add(w, 'link', null, 2);
+      wl.setAttribute('href', m.web);
+      const wt = doc.createElementNS(NS, 'text'); wt.textContent = 'Sitio web'; wl.appendChild(wt);
+    }
     add(w, 'sym', m.sym, 2);
-    add(w, 'type', TYPE_ES[m.type] || m.type, 2);
+    add(w, 'type', TYPE_ES[m.type] || SVC_LABEL[m.type] || m.type, 2);
     const ext = add(w, 'extensions', null, 2);
     for (const [k, v] of [['viz', '1'], ['viz_name', showNames ? '1' : '0']]) {
       nl(ext, 3);
@@ -426,7 +510,18 @@ const ENDPOINTS = [
 ];
 function overpassQuery(bbox, timeout = 90) {
   const [s, w, n, e] = bbox;
-  return `[out:json][timeout:${timeout}][bbox:${s},${w},${n},${e}];nwr["seamark:type"];out center tags qt;`;
+  return `[out:json][timeout:${timeout}][bbox:${s},${w},${n},${e}];(` +
+    'nwr["seamark:type"];' +
+    'nwr["leisure"~"^(marina|slipway)$"];' +
+    'nwr["waterway"~"^(fuel|boatyard|slipway)$"];' +
+    'nwr["amenity"="fuel"]["boat"="yes"];' +
+    'nwr["amenity"~"^(boat_storage|ferry_terminal)$"];' +
+    'nwr["craft"~"^(boatbuilder|sailmaker)$"];' +
+    'nwr["shop"~"^(boat|outboard_motor|marine)$"];' +
+    'nwr["club"]["sport"~"sailing|rowing|canoe|kayak|motorboat|water_ski"];' +
+    'nwr["leisure"="sports_centre"]["sport"~"sailing|rowing|canoe|kayak|motorboat|water_ski"];' +
+    'nwr["club"]["name"~"[Yy]acht|[Nn][aá]utico"];' +
+    `);out center tags qt;`;
 }
 let goodEndpoint = null;   // el último servidor que respondió bien se prueba primero
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -514,7 +609,7 @@ function elementsFromFile(j) {
 /* ---------- estado y UI ---------- */
 let marks = [];
 let map = null, rect = null, layerGroup = null;
-const checked = store.get('checked', Object.fromEntries(CATEGORIES.map(c => [c.id, c.def])));
+const checked = Object.assign(Object.fromEntries(CATEGORIES.map(c => [c.id, c.def])), store.get('checked', {}));
 
 function getBBox() {
   const v = ['s', 'w', 'n', 'e'].map(k => parseFloat($(k).value));
@@ -567,7 +662,13 @@ function renderCats() {
   box.replaceChildren();
   const counts = {};
   marks.forEach(m => counts[m.cat] = (counts[m.cat] || 0) + 1);
+  let lastGroup = null;
   for (const c of CATEGORIES) {
+    const grp = c.group || 'marks';
+    if (grp !== lastGroup) {
+      box.append(el('div', { class: 'cat-head' }, grp === 'svc' ? 'Servicios náuticos' : 'Marcas náuticas'));
+      lastGroup = grp;
+    }
     const n = counts[c.id] || 0;
     const cb = el('input', { type: 'checkbox', checked: !!checked[c.id], onchange: ev => {
       checked[c.id] = ev.target.checked; store.set('checked', checked); renderMap(); updateButtons();
@@ -592,7 +693,9 @@ function popupFor(m) {
   return el('div', { class: 'pop' },
     el('h3', null, m.name),
     el('p', null, m.desc),
-    el('a', { href: `https://www.openstreetmap.org/${m.osmType}/${m.osmId}`, target: '_blank', rel: 'noopener' }, 'Ver en OSM'));
+    el('a', { href: `https://www.openstreetmap.org/${m.osmType}/${m.osmId}`, target: '_blank', rel: 'noopener' }, 'Ver en OSM'),
+    m.web ? ' · ' : null,
+    m.web ? el('a', { href: m.web, target: '_blank', rel: 'noopener' }, 'Sitio web') : null);
 }
 function renderMap() {
   if (!map) return;
@@ -603,7 +706,9 @@ function renderMap() {
     const fill = (m.cat === 'lateral' || m.cat === 'cardinal' || m.cat === 'special' || m.cat === 'safe' || m.cat === 'danger')
       ? (COLOUR_CSS[c0] || catColor) : catColor;
     L.circleMarker([m.lat, m.lon], {
-      radius: m.cat === 'lights' ? 6 : 5, weight: 1, color: '#000', fillColor: fill, fillOpacity: .9
+      radius: m.cat.startsWith('svc_') ? 7 : m.cat === 'lights' ? 6 : 5,
+      weight: m.cat.startsWith('svc_') ? 2 : 1, color: m.cat.startsWith('svc_') ? '#fff' : '#000',
+      fillColor: fill, fillOpacity: .9
     }).bindPopup(() => popupFor(m)).addTo(layerGroup);
   }
 }
