@@ -124,7 +124,7 @@ ol{padding-left:18px;margin:6px 0}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
 'use strict';
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 
 /* ---------- utilidades DOM ---------- */
 const $ = id => document.getElementById(id);
@@ -389,41 +389,69 @@ const ENDPOINTS = [
   'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter'
 ];
-function overpassQuery(bbox) {
+function overpassQuery(bbox, timeout = 90) {
   const [s, w, n, e] = bbox;
-  return `[out:json][timeout:180][bbox:${s},${w},${n},${e}];nwr["seamark:type"];out center tags qt;`;
+  return `[out:json][timeout:${timeout}][bbox:${s},${w},${n},${e}];nwr["seamark:type"];out center tags qt;`;
 }
-async function overpass(bbox, onTry) {
+let goodEndpoint = null;   // el último servidor que respondió bien se prueba primero
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+async function overpassOne(bbox, onTry) {
   const q = overpassQuery(bbox);
+  const order = goodEndpoint ? [goodEndpoint, ...ENDPOINTS.filter(u => u !== goodEndpoint)] : ENDPOINTS;
   const errors = [];
-  for (const url of ENDPOINTS) {
-    // GET primero (pedido "simple", sin preflight), POST como alternativa.
-    for (const method of ['GET', 'POST']) {
-      onTry && onTry(url, method);
-      const ctl = new AbortController();
-      const t = setTimeout(() => ctl.abort(), 200000);
-      try {
-        const r = method === 'GET'
-          ? await fetch(url + '?data=' + encodeURIComponent(q), { signal: ctl.signal })
-          : await fetch(url, {
-              method: 'POST', signal: ctl.signal,
-              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-              body: 'data=' + encodeURIComponent(q)
-            });
-        if (!r.ok) throw new Error(`HTTP ${r.status}${r.status === 429 ? ' (servidor saturado)' : r.status === 504 ? ' (timeout del servidor)' : ''}`);
-        const j = await r.json();
-        if (j.remark && /error|timed out/i.test(j.remark) && !(j.elements || []).length) throw new Error(j.remark);
-        return j.elements || [];
-      } catch (err) {
-        const msg = err.name === 'AbortError' ? 'tiempo de espera agotado'
-          : err.name === 'TypeError' ? 'bloqueado (CORS) o sin red' : err.message;
-        errors.push(`• ${new URL(url).host} [${method}]: ${msg}`);
-        console.warn('Overpass', method, url, err);
-        if (err.name === 'AbortError') break;
-      } finally { clearTimeout(t); }
+  for (let round = 0; round < 2; round++) {
+    if (round) { onTry && onTry(null, 'reintento en 10 s…'); await sleep(10000); }
+    for (const url of order) {
+      for (const method of ['GET', 'POST']) {
+        onTry && onTry(url, method);
+        const ctl = new AbortController();
+        const t = setTimeout(() => ctl.abort(), 120000);
+        try {
+          const r = method === 'GET'
+            ? await fetch(url + '?data=' + encodeURIComponent(q), { signal: ctl.signal })
+            : await fetch(url, {
+                method: 'POST', signal: ctl.signal,
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: 'data=' + encodeURIComponent(q)
+              });
+          if (!r.ok) throw Object.assign(new Error(`HTTP ${r.status}${r.status === 429 ? ' (servidor saturado)' : r.status === 504 ? ' (servidor saturado / timeout)' : ''}`), { status: r.status });
+          const j = await r.json();
+          if (j.remark && /error|timed out/i.test(j.remark) && !(j.elements || []).length) throw new Error(j.remark);
+          goodEndpoint = url;
+          return j.elements || [];
+        } catch (err) {
+          const msg = err.name === 'AbortError' ? 'tiempo de espera agotado'
+            : err.name === 'TypeError' ? 'bloqueado (CORS) o sin red' : err.message;
+          errors.push(`• ${new URL(url).host} [${method}]: ${msg}`);
+          console.warn('Overpass', method, url, err);
+          // Si el servidor está saturado o no responde, no insistir con el otro método: pasar al siguiente.
+          if (err.name === 'AbortError' || err.status === 504 || err.status === 429) break;
+        } finally { clearTimeout(t); }
+      }
     }
   }
-  throw new Error('ningún servidor respondió\n' + errors.join('\n'));
+  throw new Error('ningún servidor respondió\n' + errors.slice(-8).join('\n'));
+}
+
+/* Zonas grandes se dividen en tramos de ≤ 0,5° × 0,5° para no saturar los servidores */
+function splitBBox([s, w, n, e], step = 0.5) {
+  const tiles = [];
+  for (let la = s; la < n - 1e-9; la += step)
+    for (let lo = w; lo < e - 1e-9; lo += step)
+      tiles.push([la, lo, Math.min(la + step, n), Math.min(lo + step, e)].map(v => +v.toFixed(5)));
+  return tiles;
+}
+async function overpass(bbox, onTry) {
+  const tiles = splitBBox(bbox);
+  const all = [];
+  for (let i = 0; i < tiles.length; i++) {
+    const els = await overpassOne(tiles[i], (url, method) =>
+      onTry && onTry(url, method, tiles.length > 1 ? `tramo ${i + 1}/${tiles.length}` : ''));
+    all.push(...els);
+    if (i < tiles.length - 1) await sleep(1500);
+  }
+  return all;
 }
 
 /* Convierte un archivo exportado de Overpass Turbo (JSON crudo o GeoJSON) a elementos Overpass */
@@ -566,7 +594,9 @@ async function doFetch() {
   $('fetch').disabled = true;
   const t0 = performance.now();
   try {
-    const els = await overpass(b, (url, method) => setStatus(`Consultando ${new URL(url).host} (${method})…\n(zonas grandes pueden tardar 1–2 min)`));
+    const els = await overpass(b, (url, method, part) => setStatus(
+      (url ? `Consultando ${new URL(url).host} (${method})` : method) + (part ? ` · ${part}` : '') +
+      '…\n(zonas grandes se bajan por tramos; puede tardar unos minutos)'));
     loadElements(els, `encontradas en ${((performance.now() - t0) / 1000).toFixed(1)} s`);
   } catch (err) {
     const local = location.protocol === 'file:';
