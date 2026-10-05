@@ -156,7 +156,7 @@ ol{padding-left:18px;margin:6px 0}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
 'use strict';
-const VERSION = '1.7.0';
+const VERSION = '1.7.1';
 
 /* ---------- utilidades DOM ---------- */
 const $ = id => document.getElementById(id);
@@ -907,6 +907,19 @@ function updateDeleted() {
   b.hidden = !n;
   b.textContent = `Restaurar marcas borradas (${n})`;
 }
+/* Botón para usar dentro de popups de Leaflet: corta el evento y cambia el DOM recién después,
+   así Leaflet no interpreta el clic como "clic en el mapa" (que cierra el popup). */
+// Reacomoda el popup al nuevo tamaño sin volver a generar el contenido (update() lo regeneraría)
+function relayoutPopup(m) {
+  const pp = m._layer && m._layer.getPopup();
+  if (pp && pp.isOpen() && pp._updateLayout) { pp._updateLayout(); pp._updatePosition(); pp._adjustPan && pp._adjustPan(); }
+}
+function popBtn(label, fn, cls) {
+  return el('button', { type: 'button', class: cls || '', onclick: ev => {
+    ev.preventDefault(); ev.stopPropagation();
+    setTimeout(fn, 0);
+  } }, label);
+}
 function editForm(m, box) {
   const name = el('input', { type: 'text', value: m.name, style: 'width:100%' });
   const desc = el('textarea', { rows: 6, style: 'width:100%' }); desc.value = m.desc;
@@ -937,9 +950,10 @@ function editForm(m, box) {
     el('label', null, 'Ícono OpenCPN', sym),
     m.cat === 'mine' ? el('div', { class: 'grid4' }, el('label', null, 'Lat', lat), el('label', null, 'Lon', lon)) : null,
     el('div', { class: 'row' },
-      el('button', { type: 'button', class: 'primary', onclick: save }, 'Guardar'),
-      el('button', { type: 'button', onclick: del }, 'Borrar'),
-      m.edited ? el('button', { type: 'button', onclick: restore }, 'Restaurar original') : null)
+      popBtn('Guardar', save, 'primary'),
+      popBtn('Borrar', del),
+      popBtn('Cancelar', () => { if (m._layer) m._layer.closePopup(); }),
+      m.edited ? popBtn('Restaurar original', restore) : null)
   );
 }
 let addMode = false;
@@ -986,6 +1000,7 @@ function updateButtons() {
 }
 function popupFor(m) {
   const box = el('div', { class: 'pop' });
+  if (window.L) { L.DomEvent.disableClickPropagation(box); L.DomEvent.disableScrollPropagation(box); }
   const view = () => box.replaceChildren(
     el('h3', null, m.name, m.edited ? el('small', { class: 'note' }, ' (editada)') : null),
     el('p', null, m.desc || '—'),
@@ -993,7 +1008,7 @@ function popupFor(m) {
     m.osmType ? el('a', { href: `https://www.openstreetmap.org/${m.osmType}/${m.osmId}`, target: '_blank', rel: 'noopener' }, 'Ver en OSM') : null,
     m.web ? ' · ' : null,
     m.web ? el('a', { href: m.web, target: '_blank', rel: 'noopener' }, 'Sitio web') : null,
-    el('div', { class: 'row' }, el('button', { type: 'button', onclick: () => editForm(m, box) }, '✎ Editar')));
+    el('div', { class: 'row' }, popBtn('✎ Editar', () => { editForm(m, box); relayoutPopup(m); })));
   if (m._editNow) { m._editNow = false; editForm(m, box); } else view();
   return box;
 }
